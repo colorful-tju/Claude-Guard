@@ -7,3 +7,7 @@ dist/
 # Keep historical private records out of future publishing; use prepare-source.py.
 docs/*
 !docs/完整验证手册.md
+
+.release/
+!docs/技术与功能详解.md
+!docs/RELEASE-0.5.0.md
