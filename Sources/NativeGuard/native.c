@@ -54,17 +54,19 @@ int csg_process(int32_t pid, CSGProcess *out) {
 int csg_pids(int32_t *pids, int capacity) { return proc_listallpids(pids,capacity*sizeof(int32_t)); }
 int csg_sockets(int32_t pid, CSGSocket *out, int capacity) {
     int bytes=proc_pidinfo(pid,PROC_PIDLISTFDS,0,NULL,0);
-    if (bytes < 0) return -1;
+    if (bytes <= 0) {if(!errno)errno=EIO;return -1;}
+    if(bytes>16*1024*1024){errno=EOVERFLOW;return -1;}
     bytes += 64*sizeof(struct proc_fdinfo);
     struct proc_fdinfo *fds=calloc(1,bytes); if(!fds) return -1;
     int got=proc_pidinfo(pid,PROC_PIDLISTFDS,0,fds,bytes);
-    if(got < 0 || got == bytes) {free(fds);return -1;}
+    if(got <= 0 || got >= bytes || got % (int)sizeof(*fds)) {int error=errno?errno:EOVERFLOW;free(fds);errno=error;return -1;}
     int count=0;
     for(int i=0;i<got/(int)sizeof(*fds);i++) {
         if(fds[i].proc_fdtype!=PROX_FDTYPE_SOCKET) continue;
         struct socket_fdinfo s;
-        if(proc_pidfdinfo(pid,fds[i].proc_fd,PROC_PIDFDSOCKETINFO,&s,sizeof(s)) != sizeof(s)) {free(fds);return -1;}
-        if(count>=capacity){free(fds);return -1;}
+        errno=0;
+        if(proc_pidfdinfo(pid,fds[i].proc_fd,PROC_PIDFDSOCKETINFO,&s,sizeof(s)) != sizeof(s)) {int error=errno?errno:EIO;free(fds);errno=error;return -1;}
+        if(count>=capacity){free(fds);errno=EOVERFLOW;return -1;}
         CSGSocket *v=&out[count++];memset(v,0,sizeof(*v));v->fd=fds[i].proc_fd;
         v->kind=s.psi.soi_kind;v->family=s.psi.soi_family;
         v->socket_type=s.psi.soi_type;v->protocol_number=s.psi.soi_protocol;

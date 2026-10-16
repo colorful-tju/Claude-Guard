@@ -19,6 +19,9 @@ public struct Guidance:Equatable {
         if raw.contains("Incomplete runtime node, process, interface or TUN evidence") {
             return .init("保护条件待核验","运行态证据不再满足防护要求","这不等于已确认虚拟网卡变动或 IP 泄漏。请导出记录检查具体差异，再重新验证。")
         }
+        if raw.contains("Socket inventory") || raw.contains("Socket owner identity") {
+            return .init("检测异常","代理进程连接信息未能完整核验","连接变化或系统读取失败均可能触发；未据此认定泄漏。请稍后重新验证，反复出现时导出反馈。")
+        }
         if raw.contains("Unique registered proxy Core") || raw.contains("TUN") {
             return .init("需要操作","尚未确认 已登记代理 的虚拟网卡","手动准备 已登记代理、HTTP 节点与 TUN，然后重新检测配置。")
         }

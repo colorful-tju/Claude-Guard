@@ -3,6 +3,8 @@ on run
     try
         set firstChoice to button returned of (display dialog "双击安装 Claude Guard
 
+已有旧版请先按 DMG 内说明恢复并退出，再使用顶层「移除 Claude Guard」卸载；卸载会清空节点和引导设置。首次安装可直接继续。
+
 无需拖入应用程序文件夹。点击继续，按提示完成一次管理员授权。不会自动切换网络或开启防护。
 
 离线恢复工具与手册已内置。应用无法打开或网络异常时，可在这里直接打开恢复工具，无需先安装。" buttons {"恢复工具", "取消", "继续"} default button "继续" cancel button "取消")

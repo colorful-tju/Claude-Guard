@@ -359,6 +359,7 @@ public final class Controller: @unchecked Sendable {
             recoveryStage="confirmProcessAbsence"
             let absent=NativeProcesses.claude(try effects.inventory().requireComplete(),uid:installation.uid,known:previousHealthy?.claudeProcesses ?? []).isEmpty
             guard absent else{throw fail("Claude still present")}
+            if status.interruption?.requestedClaudeStop==true {status.interruption?.exitConfirmed=true}
             _=try session?.claudeExited(inventoryComplete:true,processes:[])
             recoveryStage="verifyRecoveryAssets"
             let currentBoot=effects.boot()

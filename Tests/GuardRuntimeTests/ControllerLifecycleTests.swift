@@ -327,6 +327,16 @@ struct MonitoringHealthDiagnosticTests {
 }
 
 struct MonitoringBlockedRecoveryTests {
+    @Test func automaticRecoveryRefreshesExitConfirmation() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:true)
+        f.failure="terminate";f.routeFingerprint="routes-changed";c.tick()
+        #expect(c.status.phase=="recoveryBlocked")
+        #expect(c.status.interruption?.exitConfirmed==false)
+        f.failure=nil;f.clock.advance(5);c.tick()
+        #expect(c.status.phase=="off")
+        #expect(c.status.interruption?.exitConfirmed==true)
+    }
+
     @Test func diagnosticAccuratelyRecordsRecoveryBlockedWithoutRemovingTheRemainingProtection() throws {
         let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
         f.failure="remove-rules";f.routeFingerprint="routes-changed";c.tick()

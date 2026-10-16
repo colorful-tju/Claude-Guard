@@ -6,7 +6,7 @@ on run
             display dialog "请先在启动器菜单栏选择「恢复并退出」，确认 OFF 与临时 IPv6 已恢复。" buttons {"知道了"} default button 1 with icon caution
             return
         end if
-        display dialog "移除 Claude Guard 及其管理员助手？\n\n请先确认防护 OFF、Claude/Code 已退出、临时 IPv6 已恢复。若仍有恢复事务，工具会拒绝移除并保留记录。" buttons {"取消", "移除"} default button "取消" cancel button "取消" with icon caution
+        display dialog "移除 Claude Guard 及其管理员助手？\n\n同时清空当前用户的节点设置和首次引导记录。请先记下网关、端口、预期出口和自定义核心路径，重装后需要重新填写。\n\n请先确认防护 OFF、Claude/Code 已退出、临时 IPv6 已恢复。若仍有恢复事务，工具会拒绝移除并保留记录。" buttons {"取消", "移除"} default button "取消" cancel button "取消" with icon caution
         set ownerUID to do shell script "/usr/bin/id -u"
         if (ownerUID as integer) < 501 then error "请以普通用户打开移除工具。"
         with timeout of 120 seconds

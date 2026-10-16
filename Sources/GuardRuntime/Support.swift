@@ -60,8 +60,12 @@ public enum NativeProcesses {
         try inventory().requireComplete()
     }
     public static func sockets(_ pid:Int32) throws -> [CSGSocket] {
-        var rows=[CSGSocket](repeating:CSGSocket(),count:8192);let n=csg_sockets(pid,&rows,Int32(rows.count))
-        guard n>=0,n<rows.count else{throw fail("Socket inventory incomplete")};return Array(rows.prefix(Int(n)))
+        try SocketInventoryCollector.collect(pid:pid,identity:{try record($0).identity},read:{ pid in
+            var rows=[CSGSocket](repeating:CSGSocket(),count:8192)
+            errno=0;let n=csg_sockets(pid,&rows,Int32(rows.count));let nativeError=errno
+            guard n>=0,n<rows.count else{throw fail("Native socket read failed: rc=\(n) errno=\(nativeError)")}
+            return Array(rows.prefix(Int(n)))
+        },wait:Thread.sleep(forTimeInterval:))
     }
     public static func text<T>(_ field:inout T) -> String {withUnsafePointer(to:&field){String(cString:UnsafeRawPointer($0).assumingMemoryBound(to:CChar.self))}}
     public static func claude(_ records:[ProcessRecord],uid:UInt32,known:[ProcessIdentity]=[]) -> [ProcessRecord] {
