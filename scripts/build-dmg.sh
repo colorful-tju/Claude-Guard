@@ -2,7 +2,7 @@
 # Packaging only. Does not install, launch helper, change PF or execute applets.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-version=0.5.0
+version=0.5.1
 arch="${1:-arm64}"
 case "$arch" in arm64) platform=AppleSilicon;; x86_64) platform=Intel;; *) exit 2;; esac
 archive="$PWD/dist/$arch/ClaudeSafeLauncher-$version-test.zip"

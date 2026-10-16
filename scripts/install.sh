@@ -6,6 +6,7 @@ if [[ -f "$PWD/architecture" ]]; then
   expected_arch="$(cat "$PWD/architecture")"
   [[ "$expected_arch" == "$(/usr/bin/uname -m)" ]] || { echo '芯片架构不匹配，请下载对应 Apple Silicon 或 Intel 的 DMG。'; exit 2; }
 fi
+[[ "${CLAUDE_GUARD_ALLOW_UNNOTARIZED:-}" == 1 ]] || { echo '此个人测试包未公证。请从图形安装器明确确认信任后安装；未改动服务。'; exit 2; }
 user_id="${SUDO_UID:-}"
 [[ "$user_id" =~ ^[0-9]+$ && "$user_id" -ge 501 ]] || { echo '请使用普通用户账户打开图形安装器并授权。'; exit 2; }
 root='/Library/Application Support/ClaudeSafeLauncher'
@@ -15,7 +16,7 @@ helper="/Library/PrivilegedHelperTools/$label"
 plist="/Library/LaunchDaemons/$label.plist"
 [[ ! -L "$root" && ! -L "$app" && ( ! -e "$root" || -d "$root" ) ]] || { echo '拒绝不可信安装目标'; exit 2; }
 [[ ! -e "$root/ipv6-override.json" && ! -L "$root/ipv6-override.json" && ! -e "$root/session.json" && ! -L "$root/session.json" ]] || { echo '存在安全事务，请先关闭安全模式或完成紧急恢复，不能更新。'; exit 2; }
-archive="$PWD/dist/ClaudeSafeLauncher-0.5.0-test.zip"
+archive="$PWD/dist/ClaudeSafeLauncher-0.5.1-test.zip"
 [[ -f "$archive" && ! -L "$archive" ]] || { echo '安装资源缺失，请重新获取完整磁盘映像。'; exit 2; }
 # Separate from daemon.lock: serialize delivery changes without bypassing the
 # helper's authoritative OFF assertion under the daemon transaction lock.
@@ -87,10 +88,20 @@ task_install="$(mktemp -d /private/tmp/claude-safe-install.XXXXXX)"
 /usr/bin/ditto -x -k "$archive" "$task_install"
 source_app="$task_install/ClaudeSafeLauncher.app"
 /usr/bin/codesign --verify --strict --deep "$source_app"
+# Explicit personal-test consent applies only to this freshly extracted, verified app.
+/usr/bin/xattr -dr com.apple.quarantine "$source_app"
+/usr/bin/codesign --verify --strict --deep "$source_app"
 for tool in "$source_app/Contents/MacOS/ClaudeSafeLauncher" "$source_app/Contents/Resources/guard-daemon" "$source_app/Contents/Resources/guard-probe" "$source_app/Contents/Resources/guardctl"; do
   [[ -f "$tool" && ! -L "$tool" && -x "$tool" ]] || { echo '安装包缺少正常可执行组件'; exit 2; }
 done
 [[ -f "$source_app/Contents/Resources/read-node.rb" && ! -L "$source_app/Contents/Resources/read-node.rb" ]] || exit 2
+# Prove the new executable can start before stopping/replacing an existing helper.
+preflight_rc=0
+"$source_app/Contents/Resources/guard-daemon" --self-test-timer || preflight_rc=$?
+if [[ "$preflight_rc" -ne 0 ]]; then
+  echo "新助手未能运行（退出码 $preflight_rc）。可能被 macOS 安全策略拦截；旧助手尚未停止。请保留错误反馈，不要反复安装。"
+  exit "$preflight_rc"
+fi
 # Registration uses these same fixed signed dependencies. Catch missing/invalid
 # builds before stopping the existing working helper or replacing its assets.
 # Optional explicit registration for another compatible Mihomo/TUN core.
@@ -126,7 +137,7 @@ done
 commit_started=1
 /bin/rm -rf "$app"
 /usr/bin/ditto --norsrc --noextattr --noqtn "$source_app" "$app"
-/usr/bin/xattr -cr "$app"
+/usr/bin/xattr -dr com.apple.quarantine "$app"
 /usr/sbin/chown -R root:wheel "$app"
 /bin/chmod -R go-w "$app"
 /usr/bin/codesign --verify --strict --deep "$app"

@@ -11,3 +11,4 @@ docs/*
 .release/
 !docs/技术与功能详解.md
 !docs/RELEASE-0.5.0.md
+!docs/RELEASE-0.5.1.md

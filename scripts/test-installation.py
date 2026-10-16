@@ -15,7 +15,7 @@ SCRIPTS = pathlib.Path(__file__).parent
 
 
 class InstallationTests(unittest.TestCase):
-    def exercise(self, failure='', active=False, loaded=True, old=True, script='install.sh', locked=False, marker=False, unsafe_root=False, ipv6=False, wrong_arch=False):
+    def exercise(self, failure='', active=False, loaded=True, old=True, script='install.sh', locked=False, marker=False, unsafe_root=False, ipv6=False, wrong_arch=False, consent=True):
         with tempfile.TemporaryDirectory(prefix='csg-install-test-') as temp:
             base = pathlib.Path(temp)
             project = base / 'project'
@@ -79,6 +79,7 @@ if tool=='install':
   clean.append(args[i]);i+=1
  os.execv('/usr/bin/install',['/usr/bin/install']+clean)
 if tool in ['helper','guard-daemon','local.claudesafelauncher.guard']:
+ if args[0]=='--self-test-timer':fail_once('new_helper_launch')
  if args[0]=='--assert-off':
   private=base/'Library/Application Support/ClaudeSafeLauncher'
   sys.exit(2 if (private.stat().st_mode & 0o022) or (private/'session.json').exists() or (private/'enable-result.txt').exists() or (private/'ipv6-override.json').exists() else 0)
@@ -123,7 +124,7 @@ raise SystemExit('unexpected fixture command '+tool)
                 path.write_text('new-'+path.name)
                 path.chmod(0o755)
             shutil.copy2(tools/'helper',staged/'Contents/Resources/guard-daemon')
-            for version in ['0.2.7','0.2.8','0.2.9','0.3.0','0.3.1','0.3.2','0.4.0','0.4.1','0.4.2','0.4.3','0.4.4','0.4.5','0.4.6','0.5.0']:
+            for version in ['0.2.7','0.2.8','0.2.9','0.3.0','0.3.1','0.3.2','0.4.0','0.4.1','0.4.2','0.4.3','0.4.4','0.4.5','0.4.6','0.5.1']:
                 with zipfile.ZipFile(project/f'dist/ClaudeSafeLauncher-{version}-test.zip','w') as archive:
                     for path in staged.rglob('*'):
                         archive.write(path,path.relative_to(staged.parent))
@@ -136,7 +137,7 @@ raise SystemExit('unexpected fixture command '+tool)
             test_script=project/'scripts'/script
             test_script.write_text(source)
             result=subprocess.run(['/bin/bash',str(test_script)],text=True,capture_output=True,
-                                  env={'SUDO_UID':'501','PATH':'/usr/bin:/bin:/usr/sbin:/sbin'},timeout=20)
+                                  env={'CLAUDE_GUARD_ALLOW_UNNOTARIZED':('1' if consent else '0'),'SUDO_UID':'501','PATH':'/usr/bin:/bin:/usr/sbin:/sbin'},timeout=20)
             entries=[json.loads(row) for row in calls.read_text().splitlines()] if calls.exists() else []
             after={str(path):path.read_bytes() for path in old_assets if path.exists()}
             preserved=all(after.get(path)==content for path,content in before.items())
@@ -146,6 +147,19 @@ raise SystemExit('unexpected fixture command '+tool)
             service_state['sessionPresent']=(private/'session.json').exists()
             service_state['dependenciesPresent']=(app.parent/'FlClash.app').exists() and (app.parent/'Claude.app').exists()
             return result,entries,service_state,preserved,sorted(str(path.relative_to(base)) for path in base.glob('claude-safe-install.*'))
+
+    def test_personal_test_requires_explicit_consent(self):
+        result,calls,service,preserved,_=self.exercise(consent=False)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(calls,[])
+        self.assertTrue(preserved and service['loaded'])
+
+    def test_new_helper_launch_failure_precedes_stopping_old_service(self):
+        result,calls,service,preserved,_=self.exercise(failure='new_helper_launch')
+        self.assertNotEqual(result.returncode,0)
+        self.assertTrue(preserved and service['loaded'])
+        self.assertFalse(any(c[0]=='launchctl' and c[1]=='bootout' for c in calls))
+        self.assertTrue(any(c[0]=='xattr' and c[1:3]==['-dr','com.apple.quarantine'] for c in calls))
 
     def test_wrong_chip_package_rejected_before_service_changes(self):
         result,calls,service,preserved,_=self.exercise(wrong_arch=True)

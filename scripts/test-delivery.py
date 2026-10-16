@@ -25,9 +25,9 @@ end run
         config='/Users/example/a `quoted` $(unused) config.yaml'
         result=self.command(resource,'501',core,config)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(shlex.split(result.stdout),['SUDO_UID=501','/bin/bash',resource+'/scripts/install.sh',core,config])
+        self.assertEqual(shlex.split(result.stdout),['CLAUDE_GUARD_ALLOW_UNNOTARIZED=1','SUDO_UID=501','/bin/bash',resource+'/scripts/install.sh',core,config])
         result=self.command(resource,'501')
-        self.assertEqual(shlex.split(result.stdout),['SUDO_UID=501','/bin/bash',resource+'/scripts/install.sh'])
+        self.assertEqual(shlex.split(result.stdout),['CLAUDE_GUARD_ALLOW_UNNOTARIZED=1','SUDO_UID=501','/bin/bash',resource+'/scripts/install.sh'])
     def test_invalid_owner_or_partial_registration_rejected(self):
         for args in [('/tmp/payload','0'),('/tmp/payload','501; bad'),('relative','501'),('/tmp/payload','501','/tmp/core','')]:
             self.assertNotEqual(self.command(*args).returncode,0)

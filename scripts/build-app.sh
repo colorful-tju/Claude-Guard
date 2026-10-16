@@ -30,8 +30,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleDisplayName</key><string>Claude 安全启动器 · 测试版</string>
 <key>CFBundleExecutable</key><string>ClaudeSafeLauncher</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.5.0</string>
-<key>CFBundleVersion</key><string>26</string>
+<key>CFBundleShortVersionString</key><string>0.5.1</string>
+<key>CFBundleVersion</key><string>27</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>NSHighResolutionCapable</key><true/>
@@ -60,5 +60,5 @@ codesign --verify --strict --deep "$app"
 /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist"
 
 # Keep a signed archive; this workspace may be managed by a FileProvider that adds FinderInfo.
-/usr/bin/ditto -c -k --keepParent --norsrc --noextattr "$app" "$PWD/dist/$arch/ClaudeSafeLauncher-0.5.0-test.zip"
+/usr/bin/ditto -c -k --keepParent --norsrc --noextattr "$app" "$PWD/dist/$arch/ClaudeSafeLauncher-0.5.1-test.zip"
 echo "Verified signed $arch archive created."
