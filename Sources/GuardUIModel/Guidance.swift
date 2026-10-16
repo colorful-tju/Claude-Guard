@@ -28,7 +28,10 @@ public struct Guidance:Equatable {
         if raw.contains("Provider endpoint confirmation") {
             return .init("需要操作","当前端点尚未确认或配置已改变","重新检测配置，核对服务商网关与端口，再点击「确认代理端点」。")
         }
-        if raw.contains("heartbeat") || raw.contains("UI process") || raw.contains("sleep/wake") {
+        if raw.contains("heartbeat") {
+            return .init("会话中断","启动器通信超时，已保守结束防护会话","不是已确认泄漏。保持启动器运行；恢复完成后重试，反复出现请导出反馈。")
+        }
+        if raw.contains("UI process") || raw.contains("sleep/wake") {
             return .init("会话中断","启动器心跳中断或电脑发生睡眠唤醒","保持启动器运行；确认恢复完成后重新验证。")
         }
         if raw.contains("deadline") || raw.contains("timeout") {

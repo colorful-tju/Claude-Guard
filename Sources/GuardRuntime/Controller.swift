@@ -14,6 +14,11 @@ public final class Controller: @unchecked Sendable {
     private var ipv6RecoveryCount=0
     private var lastRecoveryCheck:UInt64?
     private var lastSocketObservation:UInt64?
+    private var blockedStatistics:BlockedPacketStatistics?
+    private var latestLabels=""
+    private var heartbeatWasDelayed=false
+    private var lastMonitorAt:Double?
+    private var lastMonitorInterval:Double?
     private var launched=false;private var lastExitCheck:UInt64=0
     private var logHealthy=true
     private var restartWorkersUnproven=false
@@ -108,7 +113,7 @@ public final class Controller: @unchecked Sendable {
         status.message="配置候选已读取；运行态和出口仍需验证"
     }
     private func snapshot(_ evidence:RuntimeEvidence,policy:GuardPolicy) throws -> LocalSnapshot {
-        let view=try pf.view(policy);var s=LocalSnapshot(policy:policy,core:evidence.core,connection:evidence.connection)
+        let view=try pf.view(policy);latestLabels=view.labels;var s=LocalSnapshot(policy:policy,core:evidence.core,connection:evidence.connection)
         s.epoch=evidence.epoch;s.interfaces=evidence.network.interfaces;s.routeFingerprint=evidence.routeFingerprint
         s.configurationFingerprint=evidence.node.fingerprint;s.nodeName=evidence.node.name;s.gateway=evidence.node.server;s.gatewayPort=evidence.node.port;s.protocolName=evidence.node.type
         s.flclashRunning=true;s.coreIdentityVerified=true;s.verifiedTun=evidence.network.tun;s.tunRuntimeVerified=true
@@ -128,7 +133,7 @@ public final class Controller: @unchecked Sendable {
     }
     public func begin(_ settings:Settings,launch:Bool) throws {
         guard journal==nil,status.phase=="off" else{throw fail("Stop or recover the previous session first")}
-        self.settings=settings;launched=false;logHealthy=true;status.verified=false;status.phase="checking"
+        self.settings=settings;blockedStatistics=nil;status.blockedPackets=nil;status.blockedPacketsAt=nil;status.blockedPacketsIssue=nil;launched=false;heartbeatWasDelayed=false;lastMonitorAt=nil;lastMonitorInterval=nil;status.heartbeatDiagnostic=nil;logHealthy=true;status.verified=false;status.phase="checking"
         do {
             try effects.ipv6?.verifyStable()
             recoveryAttempts=0;lastRecoveryCheck=nil
@@ -162,6 +167,9 @@ public final class Controller: @unchecked Sendable {
             for result in bundle.egress{log("echo=\(result.service.rawValue) ipv4=\(result.ipv4) measuredAt=\(result.measuredAt)")}
             let finalEvidence=try inspector.runtime(settings:settings)
             let final=try snapshot(finalEvidence,policy:policy)
+            // Final snapshot follows all startup probes: do not count them as user traffic.
+            blockedStatistics=try? BlockedPacketStatistics(policy:policy,text:latestLabels)
+            updateBlockStatistics()
             let diagnostic=ValidationDiagnostics(bundle:bundle,final:final,routesBefore:protectedEvidence.routeDetail,routesAfter:finalEvidence.routeDetail)
             _=try diagnostic.encoded()
             try storage.writeDiagnostic(diagnostic)
@@ -186,7 +194,7 @@ public final class Controller: @unchecked Sendable {
                 launched=true
             }
             status.message=launch ? "Claude 已安全启动（测试版）" : "防护验收通过；未启动 Claude。请完成 OFF 和恢复测试"
-            lastExitCheck=seconds()
+            lastExitCheck=seconds();activity.allowProtectedGrace()
         }catch {
             let cause=String(describing:error);status.lastRisk=cause;log("start rejected: \(cause)")
             if journal != nil {do{try stop(reason:cause,restoreIPv6:false)}catch{status.phase="recoveryBlocked";status.verified=false}}
@@ -213,6 +221,8 @@ public final class Controller: @unchecked Sendable {
             retryBlockedRecovery();return
         }
         guard journal != nil,status.phase=="armed",let settings,let baseline else{return}
+        let now=effects.clock.sample().uptime
+        lastMonitorInterval=lastMonitorAt.map{max(0,now-$0)};lastMonitorAt=now
         let policy=journal!.policy
         var stage="liveness",observed:LocalSnapshot?,observedRoutes:String?,acceptedRouteEquivalence=false
         do {
@@ -261,10 +271,26 @@ public final class Controller: @unchecked Sendable {
                 }
             }
             stage="finalLivenessAndEpoch";try requireActive();try requireEpoch(current.epoch)
+            updateBlockStatistics();updateHeartbeatDiagnostic()
             previousHealthy=current;previousRoutes=evidence.routeDetail
             previousHealthyAt=ISO8601DateFormatter().string(from:Date())
         }catch {
             recordMonitoringFailure(policy:policy,baseline:baseline,stage:stage,reason:String(describing:error),current:observed,routes:observedRoutes,acceptedRouteEquivalence:acceptedRouteEquivalence)
+        }
+    }
+    private func updateBlockStatistics() {
+        do {
+            guard blockedStatistics != nil else{throw fail("Block statistics baseline unavailable")}
+            status.blockedPackets=try blockedStatistics!.read(latestLabels)
+            status.blockedPacketsAt=ISO8601DateFormatter().string(from:Date());status.blockedPacketsIssue=nil
+        }catch {status.blockedPackets=nil;status.blockedPacketsIssue=String(describing:error)}
+    }
+    private func updateHeartbeatDiagnostic() {
+        var diagnostic=activity.diagnostic();diagnostic.monitorIntervalSeconds=lastMonitorInterval
+        status.heartbeatDiagnostic=diagnostic
+        if diagnostic.delayed != heartbeatWasDelayed {
+            heartbeatWasDelayed=diagnostic.delayed
+            log("heartbeat \(diagnostic.delayed ? "delayed; PF and runtime checks continue":"resumed") age=\(String(format:"%.3f",diagnostic.ageSeconds ?? 0))s maxGap=\(String(format:"%.3f",diagnostic.maxGapSeconds))s monitorInterval=\(String(format:"%.3f",lastMonitorInterval ?? 0))s")
         }
     }
     private func retryBlockedRecovery() {
@@ -293,6 +319,7 @@ public final class Controller: @unchecked Sendable {
     }
     private func recordMonitoringFailure(policy:GuardPolicy,baseline:LocalSnapshot,stage:String,reason:String,current:LocalSnapshot?,routes:String?,acceptedRouteEquivalence:Bool=false) {
         if serviceRequestedStop(){return}
+        updateHeartbeatDiagnostic()
         // Copy the observation before OFF drops the session; diagnostic-file I/O starts only after the stop/termination attempt.
         var diagnostic=MonitoringDiagnostics(sessionID:policy.sessionID,buildID:BuildIdentity.buildID,stage:stage,reason:reason,
             baseline:baseline,previousHealthy:previousHealthy,current:current,baselineRoutes:baselineRoutes,

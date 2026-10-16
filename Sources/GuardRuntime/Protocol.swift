@@ -22,7 +22,19 @@ public struct ProtectionInterruption:Codable,Sendable,Identifiable {
     public var exitConfirmed:Bool=false
     public init(reason:String,requestedClaudeStop:Bool){self.reason=reason;self.requestedClaudeStop=requestedClaudeStop}
 }
+public struct HeartbeatDiagnostic:Codable,Sendable {
+    public var ageSeconds:Double?
+    public var maxGapSeconds:Double
+    public var limitSeconds:Double
+    public var monitorIntervalSeconds:Double? = nil
+    public var delayed:Bool {(ageSeconds ?? 0)>=6}
+}
 public struct Status:Codable,Sendable {
+    public var heartbeatDiagnostic:HeartbeatDiagnostic?
+    public var blockedPackets:UInt64?
+    public var blockedPacketsAt:String?
+    public var blockedPacketsIssue:String?
+
     public var interruption:ProtectionInterruption?
 
     public var phase:String="off",message:String="尚未检测",lastRisk:String="",gateway:String="",egress:String="",physical:String="",tun:String=""

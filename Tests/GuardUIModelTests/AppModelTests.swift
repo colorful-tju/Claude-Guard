@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import GuardRuntime
+@testable import GuardRuntime
 @testable import GuardUIModel
 private final class UITransport:@unchecked Sendable {
     let entered=DispatchSemaphore(value:0),release=DispatchSemaphore(value:0)
@@ -12,7 +12,7 @@ private final class UITransport:@unchecked Sendable {
         lock.lock();operations.append(request.operation);let failNow=failAll;lock.unlock()
         if failNow{throw fail("injected IPC failure")}
         if request.operation == .verify {
-            lock.lock();started=true;lock.unlock();entered.signal();guard release.wait(timeout:.now()+2) == .success else{throw fail("fixture deadline")}
+            lock.lock();started=true;lock.unlock();entered.signal();guard release.wait(timeout:.now()+8) == .success else{throw fail("fixture deadline")}
             var s=Status();s.phase="armed";s.verified=true;return .init(ok:true,status:s)
         }
         return .init(ok:true,status:Status())
@@ -55,7 +55,7 @@ private final class SlowStatus:@unchecked Sendable {
         if request.operation == .heartbeat {lock.lock();beats+=1;lock.unlock()}
         if request.operation == .status {
             lock.lock();statusStarted=true;lock.unlock()
-            guard release.wait(timeout:.now()+2) == .success else{throw fail("fixture timeout")}
+            guard release.wait(timeout:.now()+8) == .success else{throw fail("fixture timeout")}
         }
         return .init(ok:true,status:Status())
     }
@@ -84,7 +84,7 @@ private final class StopHeartbeatFailure:@unchecked Sendable {
         if request.operation == .heartbeat {lock.lock();failed=true;lock.unlock();throw fail("injected heartbeat failure during OFF")}
         if request.operation == .stop {
             lock.lock();started=true;lock.unlock()
-            guard release.wait(timeout:.now()+2) == .success else{throw fail("fixture timeout")}
+            guard release.wait(timeout:.now()+8) == .success else{throw fail("fixture timeout")}
         }
         return .init(ok:true,status:Status())
     }
@@ -116,5 +116,40 @@ struct UIProgressTests {
         for _ in 0..<100 where model.state.message != "offline preflight" {try await Task.sleep(for:.milliseconds(5))}
         #expect(model.state.message=="offline preflight" && model.state.report=="real stage")
         #expect(model.busy && !model.state.verified && model.state.phase=="checking")
+    }
+}
+
+struct HeartbeatMainThreadTests {
+    @Test @MainActor func automaticHeartbeatContinuesWhileMainThreadIsBlocked() throws {
+        let transport=SlowStatus(),model=AppModel(autoPoll:true,preferences:nil,transport:transport.call)
+        // Deliberately do not service the main run loop. Only a genuinely independent
+        // heartbeat can arrive twice; no network/PF or privileged effects are used.
+        let end=Date().addingTimeInterval(3)
+        while transport.snapshot().0<2 && Date()<end {Thread.sleep(forTimeInterval:0.02)}
+        #expect(transport.snapshot().0>=2)
+        withExtendedLifetime(model){}
+        transport.release.signal()
+    }
+}
+
+struct HeartbeatTransientFailureTests {
+    @Test @MainActor func heartbeatOrStatusTimeoutDoesNotSendSpeculativeOFF() async throws {
+        let t=UITransport();t.failAll=true
+        let m=AppModel(autoPoll:false,preferences:nil,transport:t.call)
+        m.state.phase="armed";m.state.verified=true;m.poll()
+        for _ in 0..<200 where m.communicationWarning.isEmpty {try await Task.sleep(for:.milliseconds(5))}
+        #expect(!m.communicationWarning.isEmpty && !m.state.verified)
+        #expect(!t.snapshot().contains(.stop))
+        #expect(m.bannerTone == .waiting)
+    }
+    @Test @MainActor func heartbeatWarningAndStatisticsHaveExplicitScope() {
+        let m=AppModel(autoPoll:false,preferences:nil)
+        m.state.phase="armed";m.state.verified=true
+        m.state.heartbeatDiagnostic = .init(ageSeconds:10,maxGapSeconds:10,limitSeconds:30)
+        #expect(m.bannerTone == .waiting && m.bannerTitle.contains("响应延迟"))
+        #expect(m.blockCountText=="—" && m.blockCountCaption=="统计暂不可用")
+        m.state.blockedPackets=0
+        #expect(m.blockCountText=="0" && m.blockCountCaption.contains("整机"))
+        m.state.phase="off";#expect(m.blockCountCaption.contains("上次会话"))
     }
 }

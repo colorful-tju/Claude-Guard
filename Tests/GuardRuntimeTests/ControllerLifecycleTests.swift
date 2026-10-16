@@ -21,6 +21,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     var routeFingerprint="routes",routeDetail="route details"
     var localPort:UInt16=50000
     var rules="",reference=false,enabled=false
+    var denyPackets:UInt64=10,probePackets:UInt64=3,invalidLabels=false
     var views=0,launches=0
     var beforeView:((Int)->Void)?
     var beforeDiagnostic:(()->Void)?
@@ -86,7 +87,9 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     func recoveredToken() throws -> String {try step("recover-token");return "9"}
     func referencePresent(_ token:String) throws -> Bool {try step("reference");return token=="9" && reference}
     func foreignReferences(_ token:String?) throws -> String {try step("foreign-reference");return reference && token != "9" ? "owned-reference":""}
-    func view(_ policy:GuardPolicy) throws -> PFView {views += 1;beforeView?(views);try step("view:\(views)");return .init(enabled:enabled,main:"main",references:"",states:[],canonical:rules,labels:"")}
+    func view(_ policy:GuardPolicy) throws -> PFView {views += 1;beforeView?(views);try step("view:\(views)");return .init(enabled:enabled,main:"main",references:"",states:[],canonical:rules,labels:invalidLabels ? "unknown" : policy.rules.split(separator:"\n").filter{$0.hasPrefix("block ")}.map { row in
+            let label=String(row.split(separator:"\"")[1]);return "\(label) 100 \(label.hasSuffix("_deny") ? denyPackets:probePackets) 100 0 0 0 0"
+        }.joined(separator:"\n"))}
     func removeOwnRules() throws {try step("remove-rules");rules=""}
     func release(_ token:String) throws {try step("release");reference=false;enabled=false}
 }
@@ -602,5 +605,50 @@ struct StopRaceAndLeaseTests {
         c.tick();#expect(box.current.method=="Off" && box.saved != nil)
         #expect(c.handle(.init(.shutdown)).ok)
         #expect(box.current==box.original && box.saved==nil)
+    }
+}
+
+struct HeartbeatLoadTests {
+    @Test func armedAllowsBriefHeartbeatDelayWithoutRemovingPF() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
+        f.clock.advance(10);c.tick()
+        #expect(c.status.phase=="armed" && c.status.verified)
+        #expect(f.reference && !f.rules.isEmpty && !f.calls.contains("terminate"))
+        #expect(c.status.heartbeatDiagnostic?.ageSeconds==10 && c.status.heartbeatDiagnostic?.delayed==true)
+        c.heartbeat();c.tick();#expect(c.status.phase=="armed")
+        #expect(c.status.heartbeatDiagnostic?.delayed==false && c.status.heartbeatDiagnostic?.maxGapSeconds==10)
+    }
+    @Test func delayedHeartbeatDoesNotExcusePFChangeOrExitedUI() throws {
+        for exited in [true,false] {
+            let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
+            f.clock.advance(10)
+            if exited {f.uiPresent=false} else {f.rules="tampered"}
+            c.tick();#expect(c.status.phase != "armed");#expect(f.calls.contains("terminate"))
+        }
+    }
+    @Test func prolongedHeartbeatLossStillTerminatesBeforeRemovingRules() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
+        f.clock.advance(30);c.tick()
+        #expect(c.status.phase=="off" && c.status.lastRisk.contains("UI heartbeat lost"))
+        #expect(try #require(f.calls.firstIndex(of:"terminate")) < #require(f.calls.firstIndex(of:"remove-rules")))
+    }
+}
+
+struct BlockStatisticsLifecycleTests {
+    @Test func excludesPreArmPacketsAndRetainsLastSampleOnOFF() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
+        #expect(c.status.blockedPackets==0)
+        f.denyPackets+=7;f.probePackets+=1;c.tick()
+        #expect(c.status.blockedPackets==11) // Four probe labels plus the default deny.
+        #expect(c.status.phase=="armed")
+        try c.stop(reason:"test");#expect(c.status.blockedPackets==11)
+        c.heartbeat();try c.begin(f.settings,launch:false);#expect(c.status.blockedPackets==0)
+    }
+    @Test func unreadableOrResetStatisticsNeverFabricateZeroOrStopProtection() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
+        f.invalidLabels=true;c.tick();#expect(c.status.blockedPackets==nil && c.status.phase=="armed")
+        f.invalidLabels=false;f.denyPackets+=2;c.tick();#expect(c.status.blockedPackets==2)
+        f.denyPackets=0;c.tick();#expect(c.status.blockedPackets==nil && c.status.phase=="armed")
+        f.denyPackets=100;c.tick();#expect(c.status.blockedPackets==nil) // Reset invalidates baseline for this session.
     }
 }

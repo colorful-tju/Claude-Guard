@@ -8,7 +8,7 @@ import GuardCore
     @Published public var ipCheck:IPCheck?
     @Published public var testingIP=false
     @Published public var ipStale=false
-    @Published public var state=Status() {didSet{observeInterruption()}}
+    @Published public var state=Status() {didSet{observeInterruption();updateActivityLease()}}
     @Published public var interruptionAlert:ProtectionInterruption?
     private var lastPresentedInterruption:String?
     private func observeInterruption() {
@@ -67,15 +67,24 @@ import GuardCore
     private var timer:Timer?
     private var pollingStatus=false
     private var pollingProgress=false
-    private var heartbeatPending=false
+    private let heartbeat:HeartbeatPump
+    private var activityToken:ProcessActivityLease?
+    @Published public var communicationWarning=""
+    private func updateActivityLease() {
+        let active=["checking","validating","armed","stopping","recoveryBlocked"].contains(state.phase) || state.ipv6Override != "未临时修改"
+        if active && activityToken==nil {
+            activityToken=ProcessActivityLease()
+        } else if !active {activityToken=nil}
+    }
     private var settingsRevision:UInt64=0
     private var revision:UInt64=0
     private var stopping=false
     public init(autoPoll:Bool=true,preferences:UserDefaults? = .standard,ipv6Reader:@escaping @Sendable ()->IPv6Preview = {IPv6Preview.read()},transport:@escaping @Sendable (Request)throws->Reply = {try Wire.client($0)}) {
-        self.transport=transport;self.preferences=preferences;self.ipv6Reader=ipv6Reader;self.enableIPv6Polling=autoPoll;state.daemonBuildID=""
+        self.transport=transport;self.heartbeat=HeartbeatPump(transport:transport);self.preferences=preferences;self.ipv6Reader=ipv6Reader;self.enableIPv6Polling=autoPoll;state.daemonBuildID=""
         if let data=preferences?.data(forKey:"publicSettingsV1"),let saved=try? JSONDecoder().decode(Settings.self,from:data){settings=saved}
         onboardingComplete=preferences?.bool(forKey:"publicOnboardingV1") ?? false
         if autoPoll {
+            heartbeat.start()
             let tick=Timer(timeInterval:1,repeats:true){[weak self] _ in Task{@MainActor in self?.poll()}}
             timer=tick;RunLoop.main.add(tick,forMode:.common)
         }
@@ -93,18 +102,8 @@ import GuardCore
     public func poll() {
         if enableIPv6Polling && Date().timeIntervalSince(lastIPv6Read)>=5 {refreshIPv6()}
         let version=revision,call=transport
-        // Heartbeat never waits for status on the serialized daemon transaction queue.
-        if !heartbeatPending {
-            heartbeatPending=true
-            Task.detached{[weak self] in
-                do {
-                    _=try call(.init(.heartbeat))
-                    await MainActor.run{self?.heartbeatPending=false}
-                }catch {
-                    await MainActor.run{guard let self else{return};self.heartbeatPending=false;self.communicationFailed(version)}
-                }
-            }
-        }
+        // A pulse supports manual refresh/tests; the independent timer is authoritative.
+        heartbeat.pulse()
         if busy && !pollingProgress {
             pollingProgress=true
             Task.detached{[weak self] in
@@ -124,11 +123,17 @@ import GuardCore
                     await MainActor.run {
                         guard let self else{return};self.pollingStatus=false
                         guard version==self.revision,!self.busy else{return}
-                        self.state=reply.status
+                        self.communicationWarning="";self.state=reply.status
                         if !reply.ok{self.state.verified=false;self.failure=reply.error ?? "运行态读取失败"}
                     }
                 }catch {
-                    await MainActor.run{guard let self else{return};self.pollingStatus=false;self.communicationFailed(version)}
+                    await MainActor.run{
+                        guard let self else{return};self.pollingStatus=false
+                        guard version==self.revision else{return}
+                        self.communicationWarning="助手状态暂未返回；当前防护状态未确认，正在重试"
+                        // No speculative OFF: an IPC timeout is not proof that PF failed.
+                        self.state.verified=false
+                    }
                 }
             }
         }
@@ -191,7 +196,7 @@ import GuardCore
     public func export() {
         let panel=NSSavePanel();panel.nameFieldStringValue="ClaudeGuard反馈.json";panel.allowedContentTypes=[.json]
         if panel.runModal() == .OK,let url=panel.url {
-            do{let enc=JSONEncoder();enc.outputFormatting=[.prettyPrinted,.sortedKeys];var data=try JSONSerialization.jsonObject(with:enc.encode(state)) as! [String:Any];if let ipCheck {data["ipTest"]=try JSONSerialization.jsonObject(with:enc.encode(ipCheck));data["ipTestStale"]=ipStale};try JSONSerialization.data(withJSONObject:data,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic)}catch{failure="报告保存失败"}
+            do{let enc=JSONEncoder();enc.outputFormatting=[.prettyPrinted,.sortedKeys];var data=try JSONSerialization.jsonObject(with:enc.encode(state)) as! [String:Any];data["uiHeartbeat"]=try JSONSerialization.jsonObject(with:enc.encode(heartbeat.snapshot()));data["communicationWarning"]=communicationWarning;if let ipCheck {data["ipTest"]=try JSONSerialization.jsonObject(with:enc.encode(ipCheck));data["ipTestStale"]=ipStale};try JSONSerialization.data(withJSONObject:data,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic)}catch{failure="报告保存失败"}
         }
     }
 }

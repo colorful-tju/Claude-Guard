@@ -60,9 +60,10 @@ struct PFTransactionTests {
         let view=try pf.view(policy())
         #expect(view.enabled && view.states.isEmpty && view.canonical=="owned stateless rules\n")
         #expect(fake.rootInventoryReads==2)
-        #expect(!fake.calls.contains(where:{$0.contains("labels")}))
+        #expect(fake.calls.filter{$0.contains("labels")}.count==1)
         let states=fake.calls.firstIndex(of:["-ss","-vv"])!,lastInventory=fake.calls.lastIndex(of:["-s","Anchors"])!
         #expect(states<lastInventory)
+        #expect(fake.calls.firstIndex(of:["-a",GuardPolicy.anchor,"-s","labels"])!<lastInventory)
     }
     @Test func actualPFViewRejectsInventoryChangeAndForeignOwnNAT() throws {
         for inventory in [false,true] {

@@ -51,19 +51,20 @@ public final class PacketFilter: PacketFiltering, @unchecked Sendable {
         let refs=try pf(["-s","References"]);let info=try pf(["-s","info"])
         guard info.hasPrefix("Status: Enabled") || info.hasPrefix("Status: Disabled") else{throw fail("Unknown PF status format")}
         let observedStates=try policy.map{try states($0)} ?? []
+        let labelText=policy == nil ? "" : ((try? pf(["-a",GuardPolicy.anchor,"-s","labels"])) ?? "")
         let after=try inventories()
         guard inventory.0==after.0,inventory.1==after.1 else{throw fail("PF anchor inventory changed during inspection")}
         // This foreign-environment image is fingerprinted and journalled. Exclude
         // our own child's existence: loading/removing our rules is an expected change.
         let image=PFText.foreignImage(main:main,nat:nat,parent:parent,children:inventory.1)
-        return .init(enabled:info.hasPrefix("Status: Enabled"),main:image,references:refs,states:observedStates,canonical:ownRules,labels:"")
+        return .init(enabled:info.hasPrefix("Status: Enabled"),main:image,references:refs,states:observedStates,canonical:ownRules,labels:labelText)
     }
     public func environment() throws -> (String,String,Bool) {let v=try capture(nil);return(v.main,v.references,v.enabled)}
     public func states(_ policy:GuardPolicy) throws -> [ExistingState] {try PFText.states(pf(["-ss","-vv"]),policy:policy)}
     public func canonical() throws -> String {try ownPresent() ? pf(["-a",GuardPolicy.anchor,"-sr"]) : ""}
     public func labels() throws -> String {try ownPresent() ? pf(["-a",GuardPolicy.anchor,"-s","labels"]) : ""}
     public func view(_ policy:GuardPolicy) throws -> PFView {
-        // One fresh inventory brackets environment, own rules and state collection. Labels are read only by explicit probes.
+        // Statistics are observational; unreadable labels do not weaken mandatory rule/state verification.
         try capture(policy)
     }
     public func prepareRules(_ policy:GuardPolicy) throws -> String {
