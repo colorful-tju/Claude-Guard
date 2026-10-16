@@ -2,6 +2,12 @@ import Testing
 @testable import GuardRuntime
 
 struct RouteEvidenceTests {
+    @Test func onlyExactUnallowlistedAuxiliaryNamesCanAvoidEpochInvalidation() {
+        #expect(NetworkEvents.isAuxiliaryInterface("awdl0"))
+        #expect(NetworkEvents.isAuxiliaryInterface("llw0"))
+        for name in ["en0","utun4","lo0","awdl1","llw1","unknown",""] {#expect(!NetworkEvents.isAuxiliaryInterface(name))}
+    }
+
     @Test func exitZeroWithStderrIsNotSuccessfulRouteEvidence() {
         for r in [CommandResult(output:"",error:"route: writing to routing socket: not in table",status:0),
                   .init(output:"",error:"Operation not permitted",status:0),

@@ -348,6 +348,30 @@ struct PublicRouteCloneLifecycleTests {
         return (try #require(data["parent"]),try #require(data["clone"]))
     }
     private func setRoute(_ text:String,on f:LifecycleFixture) {f.routeDetail=text;f.routeFingerprint=hash(Data(text.utf8))}
+    @Test func auxiliaryLinkLocalRotationDoesNotStopButOtherChangesDo() throws {
+        let r=try routes()
+        let before=r.parent.replacingOccurrences(of:"fe80::ac85:eaff:fe76:69f7",with:"fe80::1")
+        let rotated=before.replacingOccurrences(of:"fe80::1%awdl0",with:"fe80::2%awdl0").replacingOccurrences(of:"fe80::1%llw0",with:"fe80::2%llw0")
+        let f=try LifecycleFixture();setRoute(before,on:f)
+        let c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
+        setRoute(rotated,on:f);c.tick()
+        #expect(c.status.phase=="armed")
+        for changed in [rotated.replacingOccurrences(of:"fe80::1%lo0",with:"fe80::2%lo0"),
+                        rotated.replacingOccurrences(of:"fe80::2%awdl0",with:"192.0.2.1"),
+                        rotated.replacingOccurrences(of:"fe80::2%awdl0",with:"2001:db8::2%awdl0"),
+                        rotated.replacingOccurrences(of:"awdl0:13:",with:"awdl0:99:"),
+                        rotated.replacingOccurrences(of:"awdl0:13:34915",with:"awdl0:13:1"),
+                        rotated.replacingOccurrences(of:"gateway=198.18.0.1",with:"gateway=198.18.0.2")] {
+            let f=try LifecycleFixture();setRoute(before,on:f)
+            let c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
+            setRoute(changed,on:f);c.tick();#expect(c.status.phase=="off")
+        }
+        let startup=try LifecycleFixture();setRoute(before,on:startup)
+        let launch=try startup.makeController();launch.heartbeat()
+        startup.beforeProbe={setRoute(rotated,on:startup)}
+        reject{try launch.begin(startup.settings,launch:true)}
+        #expect(startup.launches==0)
+    }
     @Test func automaticStopReportsOnlyConfirmedTerminationAndManualOFFDoesNotAlert() throws {
         let r=try routes()
         for terminationFails in [false,true] {

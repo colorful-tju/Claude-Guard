@@ -21,8 +21,20 @@ public final class NetworkEvents: @unchecked Sendable {
         s.setEventHandler {[weak self] in self?.drain()}
         s.resume()
     }
+    static func isAuxiliaryInterface(_ name:String)->Bool {name=="awdl0" || name=="llw0"}
     private func drain(){
-        while true {let r=csg_route_read(fd);if r==0{break};if r==2{continue};lock.lock();generation += 1;if r<0{failed=true};lock.unlock();if r<0{break}}
+        while true {
+            var index:UInt32=0
+            let r=csg_route_read_event(fd,&index)
+            if r==0{break};if r==2{continue}
+            // These exact interfaces cannot be policy.physical (enN) or policy.tun (utunN).
+            // PF's default deny still covers them. Full snapshots continue to reject
+            // changes to interface indices, flags, IPv4/global IPv6, or verified routes.
+            var name=[CChar](repeating:0,count:Int(IF_NAMESIZE))
+            if r==1,index>0,if_indextoname(index,&name) != nil,
+               Self.isAuxiliaryInterface(String(decoding:name.prefix{ $0 != 0 }.map{UInt8(bitPattern:$0)},as:UTF8.self)){continue}
+            lock.lock();generation += 1;if r<0{failed=true};lock.unlock();if r<0{break}
+        }
     }
     public func epoch() throws -> UInt64 {routeQueue.sync{drain()};lock.lock();defer{lock.unlock()};guard !failed else{throw fail("Route events lost")};return generation}
     deinit {source?.cancel();if fd>=0{close(fd)}}

@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import GuardCore
 
 /// Runtime-only equivalence. Startup continues to compare the untouched full route fingerprint.
@@ -12,10 +13,30 @@ enum MonitoringRouteEvidence {
               current.verifiedTun==policy.tun,baseline.verifiedTun==policy.tun,
               current.tunRuntimeVerified,baseline.tunRuntimeVerified,
               let before=split(baselineRoutes),let after=split(currentRoutes),
-              before.prefix==after.prefix,equivalentGatewaySections(before.suffix,after.suffix),
+              equivalentInventory(before.prefix,after.prefix),equivalentGatewaySections(before.suffix,after.suffix),
               equivalent(before.route,after.route,tun:policy.tun) else{return current}
         var compared=current;compared.routeFingerprint=baseline.routeFingerprint
         return compared
+    }
+    // Runtime-only: preserve names, indices, flags, all other interfaces and
+    // every non-link-local address. This does not authorize auxiliary traffic.
+    private static func equivalentInventory(_ a:String,_ b:String)->Bool {
+        func normalized(_ text:String)->String {
+            text.components(separatedBy:"\n").map { line in
+                let fields=line.split(separator:":",maxSplits:3,omittingEmptySubsequences:false)
+                guard fields.count==4,NetworkEvents.isAuxiliaryInterface(String(fields[0])) else{return line}
+                let name=String(fields[0])
+                let addresses=fields[3].split(separator:",",omittingEmptySubsequences:false).filter { entry in
+                    let parts=entry.split(separator:"%",omittingEmptySubsequences:false)
+                    guard parts.count==2,parts[1]==name else{return true}
+                    var address=in6_addr()
+                    guard String(parts[0]).withCString({inet_pton(AF_INET6,$0,&address)})==1 else{return true}
+                    return withUnsafeBytes(of:address){!($0[0]==0xfe && ($0[1]&0xc0)==0x80)}
+                }
+                return fields.prefix(3).joined(separator:":")+":"+addresses.joined(separator:",")
+            }.joined(separator:"\n")
+        }
+        return normalized(a)==normalized(b)
     }
     private struct Detail {let prefix:String;let route:String;let suffix:String}
     private static func split(_ detail:String) -> Detail? {

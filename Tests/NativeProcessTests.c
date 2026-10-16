@@ -3,12 +3,27 @@
 #include <sys/proc.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <net/if.h>
+#include <net/route.h>
+#include <assert.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
 /* Creates and reaps ONLY its own child. No network, PF, or existing-process signals. */
 int main(void) {
+    uint32_t index=0;
+    struct ifa_msghdr address={0};address.ifam_msglen=sizeof(address);address.ifam_version=RTM_VERSION;address.ifam_type=RTM_NEWADDR;address.ifam_index=13;
+    assert(csg_route_message(&address,sizeof(address),&index)==1 && index==13);
+    address.ifam_type=RTM_DELADDR;address.ifam_index=19;
+    assert(csg_route_message(&address,sizeof(address),&index)==1 && index==19);
+    address.ifam_version=0;assert(csg_route_message(&address,sizeof(address),&index)==-1);
+    struct if_msghdr interface={0};interface.ifm_msglen=sizeof(interface);interface.ifm_version=RTM_VERSION;interface.ifm_type=RTM_IFINFO;interface.ifm_index=12;
+    assert(csg_route_message(&interface,sizeof(interface),&index)==1 && index==12);
+    assert(csg_route_message(&interface,3,&index)==-1);
+    struct rt_msghdr route={0};route.rtm_msglen=sizeof(route);route.rtm_version=RTM_VERSION;route.rtm_type=RTM_CHANGE;route.rtm_index=14;
+    assert(csg_route_message(&route,sizeof(route),&index)==1 && index==14);
+    route.rtm_flags=RTF_WASCLONED;assert(csg_route_message(&route,sizeof(route),&index)==2);
     CSGProcess self={0};
     if(csg_process(getpid(),&self)!=0 || self.pid!=getpid() || !self.path[0]) {
         fprintf(stderr,"Live self process identity missing\n");return 1;

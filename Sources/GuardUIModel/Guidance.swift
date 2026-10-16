@@ -16,6 +16,9 @@ public struct Guidance:Equatable {
         if raw.contains("routeFingerprint") || raw.contains("premises changed") || raw.contains("epoch") || raw.contains("Runtime changed") {
             return .init("保护条件变化","网络前提发生变化，防护验证已失效","确认 已登记代理/TUN 与当前网络稳定，再重新验证；详细差异保留在日志。")
         }
+        if raw.contains("Incomplete runtime node, process, interface or TUN evidence") {
+            return .init("保护条件待核验","运行态证据不再满足防护要求","这不等于已确认虚拟网卡变动或 IP 泄漏。请导出记录检查具体差异，再重新验证。")
+        }
         if raw.contains("Unique registered proxy Core") || raw.contains("TUN") {
             return .init("需要操作","尚未确认 已登记代理 的虚拟网卡","手动准备 已登记代理、HTTP 节点与 TUN，然后重新检测配置。")
         }

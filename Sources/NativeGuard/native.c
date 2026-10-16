@@ -202,8 +202,15 @@ int csg_probe_detailed(int family,int tcp,uint32_t index,const char *source,cons
 }
 int csg_probe(int family,int tcp,uint32_t index,const char *source,const char *target,uint16_t sport,uint16_t dport,int timeout,int stun,int *sent){return csg_probe_detailed(family,tcp,index,source,target,sport,dport,timeout,stun,sent,NULL);}
 int csg_route_open(void){int fd=socket(PF_ROUTE,SOCK_RAW,0);if(fd>=0&&fcntl(fd,F_SETFL,O_NONBLOCK)<0){int error=errno;close(fd);errno=error;return -1;}return fd;}
-int csg_route_read(int fd){unsigned char b[8192];ssize_t n=read(fd,b,sizeof(b));if(n<0)return errno==EAGAIN?0:-1;if(n<4)return -1;int type=b[3];
-    if(type==RTM_IFINFO||type==RTM_NEWADDR||type==RTM_DELADDR)return 1;
-    if(type==RTM_ADD||type==RTM_DELETE||type==RTM_CHANGE){if(n<sizeof(struct rt_msghdr))return -1;struct rt_msghdr *r=(void*)b;if(!(r->rtm_flags&(RTF_LLINFO|RTF_WASCLONED)))return 1;}
+/* Expose the event's interface, never infer that a global route epoch is a TUN lifetime. */
+int csg_route_message(const void *data,size_t n,uint32_t *index){
+    *index=0;if(n<4)return -1;const unsigned char *b=data;uint16_t length;memcpy(&length,b,2);
+    if(length!=n||b[2]!=RTM_VERSION)return -1;
+    int type=b[3];
+    if(type==RTM_IFINFO){struct if_msghdr r;if(n<sizeof(r))return -1;memcpy(&r,b,sizeof(r));*index=r.ifm_index;return *index?1:-1;}
+    if(type==RTM_NEWADDR||type==RTM_DELADDR){struct ifa_msghdr r;if(n<sizeof(r))return -1;memcpy(&r,b,sizeof(r));*index=r.ifam_index;return *index?1:-1;}
+    if(type==RTM_ADD||type==RTM_DELETE||type==RTM_CHANGE){struct rt_msghdr r;if(n<sizeof(r))return -1;memcpy(&r,b,sizeof(r));*index=r.rtm_index;if(!(r.rtm_flags&(RTF_LLINFO|RTF_WASCLONED)))return 1;}
     return 2;
 }
+int csg_route_read_event(int fd,uint32_t *index){unsigned char b[8192];*index=0;ssize_t n=read(fd,b,sizeof(b));if(n<0)return errno==EAGAIN?0:-1;if(n==(ssize_t)sizeof(b))return -1;return csg_route_message(b,(size_t)n,index);}
+int csg_route_read(int fd){uint32_t index;return csg_route_read_event(fd,&index);}

@@ -30,4 +30,6 @@ enum { CSG_PROBE_SOCKET=1, CSG_PROBE_BOUND_IF=2, CSG_PROBE_ADDRESS=3, CSG_PROBE_
 int csg_probe_detailed(int family, int tcp, uint32_t index, const char *source, const char *target, uint16_t source_port, uint16_t target_port, int timeout_ms, int stun, int *sent, CSGProbeDiagnostics *diagnostics);
 int csg_route_open(void);
 int csg_route_read(int fd);
+int csg_route_read_event(int fd, uint32_t *interface_index);
+int csg_route_message(const void *data, size_t length, uint32_t *interface_index);
 #endif
