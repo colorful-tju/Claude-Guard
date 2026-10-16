@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+.DS_Store
+test-results/
+dist/
+*.log
+# Keep historical private records out of future publishing; use prepare-source.py.
+docs/*
+!docs/完整验证手册.md
