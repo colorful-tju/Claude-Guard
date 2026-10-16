@@ -245,12 +245,13 @@ public final class Controller: @unchecked Sendable {
             }
             if seconds()-lastExitCheck>=15 && !healthPending {
                 healthPending=true;let id=journal!.policy.sessionID;let expected=journal!.policy.endpoint.expectedEgress
-                healthGroup.enter()
+                let group = healthGroup
+                group.enter()
                 DispatchQueue.global().async {[weak self] in
+                    defer { group.leave() }
                     guard let self else{return}
                     let ip=try? self.effects.healthProbe({[self] in cancelled()})
                     let observedAt=self.seconds()
-                    self.healthGroup.leave()
                     self.queue.async {[weak self] in
                         guard let self else{return};self.healthPending=false
                         guard self.journal?.policy.sessionID==id,self.status.phase=="armed" else{return}

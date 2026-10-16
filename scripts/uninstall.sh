@@ -22,7 +22,11 @@ if ! /usr/bin/sudo -H -u "#$owner_uid" /bin/bash "$script_dir/reset-user-prefere
   echo '用户偏好未确认清空；保留应用和助手。'
   exit 2
 fi
-/bin/rm -f "/Library/LaunchDaemons/$label.plist" "/Library/PrivilegedHelperTools/$label"
+# Keep the executable recovery path until all other removals have succeeded.
+# A partial deletion can then be retried with the same installed helper.
 [[ ! -L "$root" ]] || exit 2
-/bin/rm -rf "$root" /Applications/ClaudeSafeLauncher.app
+/bin/rm -rf /Applications/ClaudeSafeLauncher.app
+/bin/rm -rf "$root"
+/bin/rm -f "/Library/LaunchDaemons/$label.plist"
+/bin/rm -f "$helper"
 echo '仅删除本应用及助手；未改动系统代理、DNS、路由或 Apple PF 规则。'

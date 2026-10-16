@@ -43,6 +43,18 @@ struct PFTransactionTests {
         let endpoint=try Endpoint(gateway:"23.20.10.8",port:5376,expectedEgress:"1.1.1.1",configurationFingerprint:"config",providerConfirmed:true,confirmedGateway:"23.20.10.8",confirmedPort:5376,confirmedFingerprint:"config",protocolName:"http")
         return try .init(endpoint:endpoint,physical:.init(name:"en0",index:6,generation:1,ipv4:"172.21.191.84"),tun:.init(name:"utun4",index:20,generation:1,ipv4:"198.18.0.1"))
     }
+    @Test func dryParseRequiresFinalUnconditionalDeny() throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent("pf-dry-"+UUID().uuidString)
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        defer{try? FileManager.default.removeItem(at:root)}
+        let policy=try policy()
+        for altered in [false,true] {
+            let text=altered ? policy.rules.replacingOccurrences(of:"block drop out quick all",with:"block drop out quick on en0 all") : policy.rules
+            let pf=PacketFilter(commands:Commands(),root:root.path,execute:{_,_,_ in .init(output:text,error:"",status:0)})
+            if altered {reject{_ = try pf.prepareRules(policy)}}
+            else {#expect(try pf.prepareRules(policy)==policy.rules)}
+        }
+    }
     @Test func actualPFViewBracketsOwnRulesAndStatesInOneFreshInventory() throws {
         let fake=PFExecutionFixture(),pf=PacketFilter(commands:Commands(),root:"/nonexistent",execute:fake.execute)
         let view=try pf.view(policy())

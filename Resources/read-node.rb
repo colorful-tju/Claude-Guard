@@ -4,7 +4,9 @@ require 'digest'
 # Safe_load rejects Ruby object tags, aliases, duplicate keys are checked separately.
 raw = File.binread(ARGV.fetch(0))
 raise 'oversized configuration' if raw.bytesize > 2_000_000
-ast = Psych.parse(raw)
+stream = Psych.parse_stream(raw)
+raise 'multiple YAML documents unsupported' unless stream.children.length == 1
+ast = stream.children.first
 walk = lambda do |node|
   if node.is_a?(Psych::Nodes::Mapping)
     keys=node.children.each_slice(2).map{|k,v| raise 'non-scalar key' unless k.is_a?(Psych::Nodes::Scalar); k.value}
@@ -23,6 +25,7 @@ n=nodes.first
 raise 'wrong node' unless n['name'].is_a?(String) && !n['name'].strip.empty? && n['type']=='http'
 raise 'additional transport unsupported' if n['tls']==true || n['udp']==true || n['dialer-proxy'] || n['interface-name'] || n['routing-mark']
 raise 'unsupported endpoint' unless n['server'].is_a?(String) && n['server'].match?(/\A[0-9]+(?:\.[0-9]+){3}\z/)
+raise 'invalid IPv4 endpoint' unless n['server'].split('.').all? {|part| part.to_i.between?(0,255) && part.to_i.to_s == part }
 raise 'invalid port' unless n['port'].is_a?(Integer) && n['port'].between?(1,65535)
 raise 'direct main configuration unsupported' unless ['rule','global'].include?(d['mode'])
 raise 'rule path unsupported' unless (d['rules'] || []).all? {|r| r.is_a?(String)}

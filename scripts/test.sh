@@ -17,6 +17,8 @@ fi
 swift test "${args[@]}" "$@"
 # Exercise the executable's Swift 6 main isolation, not only a library test queue.
 # This mode runs before root checks and never constructs the privileged controller.
+swift build --product guard-simulation
+.build/debug/guard-simulation
 swift build --product guard-daemon
 .build/debug/guard-daemon --self-test-timer
 bash scripts/test-native-process.sh
@@ -35,3 +37,5 @@ python3 scripts/test-monitor-capture.py
 python3 scripts/test-delivery.py
 
 python3 scripts/test-preferences-reset.py
+
+python3 scripts/test-node-parser.py

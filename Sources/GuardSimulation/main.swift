@@ -43,7 +43,7 @@ do {
         try SafetyGate.validate(bundle, final: changed, policy: policy, now: 100)
         throw GuardFailure.rejected("Simulation failed: changed snapshot unexpectedly accepted")
     } catch let error as GuardFailure {
-        guard error == .rejected("Final premises changed during validation") else { throw error }
+        guard case .rejected(let reason) = error, reason.hasPrefix("Final premises changed during validation:") else { throw error }
         print("模拟：最终网络代次改变 → 拒绝启动")
     }
     _ = session.stop(reason: "synthetic heartbeat failure")

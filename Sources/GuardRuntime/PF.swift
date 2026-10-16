@@ -75,6 +75,11 @@ public final class PacketFilter: PacketFiltering, @unchecked Sendable {
         let expected=dry.components(separatedBy:.newlines).filter{$0.hasPrefix("pass ") || $0.hasPrefix("block ")}.joined(separator:"\n")+"\n"
         guard expected.components(separatedBy:.newlines).filter({$0.hasPrefix("pass ")}).allSatisfy({$0.contains("no state")}),
               expected.components(separatedBy:.newlines).filter({!$0.isEmpty}).count==policy.rules.components(separatedBy:.newlines).filter({!$0.isEmpty}).count else{throw fail("PF dry parse omitted or changed safety rules")}
+        let last = expected.split(separator:"\n").last.map(String.init) ?? ""
+        let required = policy.rules.split(separator:"\n").last.map(String.init) ?? ""
+        guard last == required, last.hasPrefix("block drop out quick all label ") else {
+            throw fail("PF dry parse lost final unconditional outbound deny")
+        }
         return expected
     }
     public func activateRules(_ policy:GuardPolicy,expected:String) throws {

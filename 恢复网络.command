@@ -10,7 +10,16 @@ read -r -p '输入 1 / 2 / 3，其他输入退出：' choice
 case "$choice" in
   1) /bin/bash scripts/emergency-recover.sh ;;
   2) /bin/bash scripts/emergency-recover.sh --force-own ;;
-  3) /bin/bash scripts/emergency-recover.sh --last-resort ;;
+  3) /bin/bash scripts/emergency-recover.sh --last-resort
+     if [[ $? -ne 0 ]]; then
+       echo '常规兜底受阻。继续将忽略助手/进程/锁的核验失败，停用整个 PF；可能被其他进程重新启用，不代表恢复完成。'
+       read -r -p '确认已退出 Claude 并接受解除所有 PF 防护，输入 UNPROTECT：' confirmation
+       if [[ "$confirmation" == UNPROTECT ]]; then
+         /bin/bash scripts/emergency-recover.sh --last-resort --confirm-unprotected
+       else
+         false
+       fi
+     fi ;;
   *) exit 0 ;;
 esac
 result=$?

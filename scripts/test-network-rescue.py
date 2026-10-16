@@ -16,7 +16,7 @@ SCRIPT = pathlib.Path(__file__).with_name('rescue-network.rb')
 class RescueTests(unittest.TestCase):
     def run_rescue(self, mode, diagnostic=False, disable_fails=False, daemon_stuck=False,
                    launch_error=False, claude_ancestor=False, unsafe_directory=False,
-                   busy_bad_lock=False):
+                   busy_bad_lock=False, override=False):
         with tempfile.TemporaryDirectory(prefix='csg-rescue-test-') as temp:
             root = pathlib.Path(temp)
             private = root / 'private'
@@ -72,7 +72,7 @@ class RescueTests(unittest.TestCase):
                 source = source.replace(original, str(root / tool))
             copy = root / 'rescue.rb'
             copy.write_text(source)
-            result = subprocess.run(['/usr/bin/ruby',str(copy),mode],text=True,capture_output=True,
+            result = subprocess.run(['/usr/bin/ruby',str(copy),mode]+(['--confirm-unprotected'] if override else []),text=True,capture_output=True,
                                     env={'SUDO_UID':'501','PATH':'/usr/bin:/bin'},timeout=15)
             if held_lock:
                 held_lock.close()
@@ -115,6 +115,20 @@ class RescueTests(unittest.TestCase):
         self.assertNotEqual(result.returncode,0)
         self.assertTrue(state['own'] and state['enabled'])
         self.assertFalse(any(call[0]=='pfctl' for call in calls))
+
+    def test_explicit_override_can_disable_despite_unverifiable_preconditions(self):
+        for fault in ['daemon_stuck','launch_error','claude_ancestor','busy_bad_lock']:
+            result, calls, state, journal = self.run_rescue('--last-resort',override=True,**{fault:True})
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertFalse(state['enabled'])
+            self.assertIn('EMERGENCY_UNPROTECTED',result.stdout)
+            self.assertNotIn('PF_DISABLED_VERIFIED',result.stdout)
+            self.assertEqual(journal,'{corrupt journal preserved}')
+
+    def test_override_cannot_claim_success_if_pf_disable_fails(self):
+        result, _, state, _ = self.run_rescue('--last-resort',override=True,daemon_stuck=True,disable_fails=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertTrue(state['enabled'])
 
     def test_unknown_flag_has_no_side_effects(self):
         result, calls, _, _ = self.run_rescue('--unknown')

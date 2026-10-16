@@ -4,7 +4,7 @@
 
 面向 macOS 的小型桌面工具，为通过 HTTP 代理使用 Claude Desktop 与本机 Claude Code 的用户提供临时出口限制、启动前验收与运行中监控。使用结束后，按顺序退出受保护进程并恢复本工具修改的网络状态。
 
-> **0.5.1 测试版 · macOS 14+ · 源码可见 / 非商业 / 禁止二次开发**  
+> **0.5.2 测试版 · macOS 14+ · 源码可见 / 非商业 / 禁止二次开发**
 > 个人测试版安装修复，尚未完成 Apple 公证，不是 Anthropic 官方软件。作者：[colorful / @colorful-tju](https://github.com/colorful-tju)。许可见 [LICENSE](LICENSE)。
 
 ## 为什么需要它
@@ -21,7 +21,7 @@ Claude Guard 面向这样的使用场景：你已经准备好一个 **数字 IPv
 |---|---|
 | 安全启动 Claude | 检查配置、核心身份、真实网关连接和 TUN；加载 PF 限制；完成出口与负向探针后启动 |
 | 仅验证防护 | 完成同一套防护验收，进入 ARMED，但不启动 Claude |
-| 临时出口限制 | 放行回环、已验证 TUN、指定物理接口到代理网关的 TCP、限定 DHCP；默认阻断其他新出站 IP 路径 |
+| 临时出口限制 | 放行回环、已验证 TUN、指定物理接口到代理网关的 TCP；默认阻断其他新出站 IP 路径 |
 | 两个 HTTPS 出口检测 | 展示 ipify 与 Webshare 返回的 IPv4，并与用户配置比较；不推断网关或国家 |
 | 临时 IPv6 管理 | 在 OFF 且 Claude/Code 已退出时关闭或启用 Automatic，保存并恢复原设置 |
 | 持续监控 | 检查 PF、核心/TUN、路由与进程前提，周期复核出口；异常时显示中文提示及停止原因 |
@@ -47,7 +47,7 @@ Claude Guard 面向这样的使用场景：你已经准备好一个 **数字 IPv
 
 ### 1. 打开 DMG
 
-从 [Releases](https://github.com/colorful-tju/Claude-Guard/releases/tag/v0.5.1) 获取对应架构的 DMG：`Claude-Guard-0.5.1-macOS-AppleSilicon-arm64.dmg` 或 `Claude-Guard-0.5.1-macOS-Intel-x86_64.dmg`。分别提供 Apple Silicon 与 Intel 测试包，适用于 Mac、macOS 14 或以上；不需要 Xcode、源码或终端构建命令。macOS 26 使用系统 Liquid Glass，旧系统使用材质回退。
+从 [Releases](https://github.com/colorful-tju/Claude-Guard/releases/tag/v0.5.2) 获取对应架构的 DMG：`Claude-Guard-0.5.2-macOS-AppleSilicon-arm64.dmg` 或 `Claude-Guard-0.5.2-macOS-Intel-x86_64.dmg`。分别提供 Apple Silicon 与 Intel 测试包，适用于 Mac、macOS 14 或以上；不需要 Xcode、源码或终端构建命令。macOS 26 使用系统 Liquid Glass，旧系统使用材质回退。
 
 打开映像，双击唯一的「双击安装 Claude Guard.app」，**无需拖入应用程序文件夹**。根据图形提示完成管理员授权，成功后选择打开 App。更新前请先在旧版菜单栏选择「恢复并退出」。不要直接删除旧助手或恢复记录。
 
@@ -157,14 +157,16 @@ sudo '/Library/PrivilegedHelperTools/local.claudesafelauncher.guard' --restore-i
 
 ### 清除节点和首次引导状态
 
-0.5.1 的「移除 Claude Guard」会同时清理当前用户的节点、引导标记及本机专用偏好，复读核验后才报告成功。请先「恢复并退出」，再从新版 DMG 的「恢复工具」打开移除程序；不必先安装新版。旧版仅删除系统组件，四项系统路径消失不等于用户偏好已清理。重新安装应进入空白首次引导，详见验证手册末节。
+0.5.2 的「移除 Claude Guard」会同时清理当前用户的节点、引导标记及本机专用偏好，复读核验后才报告成功。请先「恢复并退出」，再从新版 DMG 的「恢复工具」打开移除程序；不必先安装新版。旧版仅删除系统组件，四项系统路径消失不等于用户偏好已清理。重新安装应进入空白首次引导，详见验证手册末节。
 
-0.5.1 额外处理 macOS 偏好删除命令返回成功但 plist 仍残留的情况：清理本应用标准与本机专用的用户偏好文件，再复读核验；不删除其他应用偏好，不重启整个偏好服务。
+0.5.2 额外处理 macOS 偏好删除命令返回成功但 plist 仍残留的情况：清理本应用标准与本机专用的用户偏好文件，再复读核验；不删除其他应用偏好，不重启整个偏好服务。
 
 ## 最新发布说明
 
-见 [个人测试安装修复说明](docs/RELEASE-0.5.1.md)。Apple Silicon 与 Intel 包分别命名，务必按芯片选择。网络设置合并为一个检测并填写按钮；配置改变、结果不一致或检测失败时不覆盖原值。
+见 [个人测试安装修复说明](docs/RELEASE-0.5.2.md)。Apple Silicon 与 Intel 包分别命名，务必按芯片选择。网络设置合并为一个检测并填写按钮；配置改变、结果不一致或检测失败时不覆盖原值。
 
 ## 个人测试版下载后被 macOS 拦截
 
-0.5.0 存在嵌套助手下载隔离处理时序问题，请使用 0.5.1。此软件尚无 Developer ID / Apple 公证。首次打开外层安装器可能仍需在 macOS「隐私与安全性」允许；确认来源后，安装器会再次说明并请求同意，仅处理该包解出的 App 副本的下载隔离属性，不关闭 Gatekeeper 或 SIP。不同意可取消。详见 [0.5.1 安装修复说明](docs/RELEASE-0.5.1.md)。
+0.5.0 存在嵌套助手下载隔离处理时序问题，请使用 0.5.2。此软件尚无 Developer ID / Apple 公证。首次打开外层安装器可能仍需在 macOS「隐私与安全性」允许；确认来源后，安装器会再次说明并请求同意，仅处理该包解出的 App 副本的下载隔离属性，不关闭 Gatekeeper 或 SIP。不同意可取消。详见 [0.5.2 安装修复说明](docs/RELEASE-0.5.2.md)。
+
+安全会话当前不开放物理接口 DHCP 续租；租约或接口变化可能触发安全停止。模型中的 DHCP 选项尚未接入运行流程。

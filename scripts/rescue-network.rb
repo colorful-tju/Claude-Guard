@@ -4,6 +4,8 @@
 # tokens, deletes recovery assets, restarts the helper, or changes DNS/routes.
 require 'open3'
 
+override = ARGV == ['--last-resort', '--confirm-unprotected']
+ARGV.pop if override
 mode = ARGV.fetch(0, '')
 abort '用法：rescue-network.rb --force-own 或 --last-resort' unless ARGV.length == 1 && ['--force-own', '--last-resort'].include?(mode)
 abort '需要 Mac 管理员权限；请运行 emergency-recover.sh 的对应参数。' unless Process.euid == 0
@@ -71,7 +73,11 @@ begin
       lock = File.open(root+'/daemon.lock', File::RDWR|File::CREAT|File::NOFOLLOW, 0600)
       info = lock.stat
       raise '事务锁不是普通文件' unless info.file?
-      raise BusyRecoveryLock, '其他恢复进程持有事务锁；未修改 PF' unless lock.flock(File::LOCK_EX|File::LOCK_NB)
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 3
+      until lock.flock(File::LOCK_EX|File::LOCK_NB)
+        raise BusyRecoveryLock, '等待事务锁 3 秒仍被占用；未修改 PF' if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+        sleep 0.1
+      end
       raise '事务锁归属不可信' unless info.uid == Process.euid && (info.mode & 0022) == 0
     end
   rescue BusyRecoveryLock
@@ -133,6 +139,17 @@ begin
   puts '助手保持停止；不要继续安全启动。由后续正常恢复/卸载处理保留资产。'
 rescue => error
   warn "恢复受阻：#{error}"
+  if last_resort && override
+    warn '已明确选择解除保护：无法确认助手/Claude/锁状态；其他进程可能重新启用 PF。请退出 Claude。'
+    begin
+      run_fixed('/sbin/pfctl', ['-d'])
+      raise 'PF 未确认停用' unless display(['-s','info']).match?(/\AStatus: Disabled\b/)
+      puts 'EMERGENCY_UNPROTECTED：仅确认此刻 PF 已停用；不是 OFF 验收，不保证保持停用。保留所有恢复资产。'
+      exit 0
+    rescue => final_error
+      warn "全局兜底失败：#{final_error}；请重启 Mac。"
+    end
+  end
   exit 2
 ensure
   lock&.close

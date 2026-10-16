@@ -44,6 +44,9 @@ s=json.loads(fixture.read_text())
 def fail_once(name):
  if s['failure']==name and not s['failed']:
   s['failed']=True;fixture.write_text(json.dumps(s));sys.exit(9)
+if tool=='rm':
+ if any(a.endswith('/Applications/ClaudeSafeLauncher.app') for a in args):fail_once('remove_app')
+ os.execv('/bin/rm',['/bin/rm']+args)
 if tool=='sudo':
  fail_once('preferences');sys.exit(0)
 if tool=='launchctl':
@@ -92,7 +95,7 @@ raise SystemExit('unexpected fixture command '+tool)
 '''
             tools = base / 'tools'
             tools.mkdir()
-            for name in ['launchctl', 'codesign', 'chown', 'xattr', 'ditto', 'install', 'helper', 'sudo']:
+            for name in ['launchctl', 'codesign', 'chown', 'xattr', 'ditto', 'install', 'helper', 'sudo', 'rm']:
                 path = tools / name
                 path.write_text(tool_source)
                 path.chmod(0o755)
@@ -124,7 +127,7 @@ raise SystemExit('unexpected fixture command '+tool)
                 path.write_text('new-'+path.name)
                 path.chmod(0o755)
             shutil.copy2(tools/'helper',staged/'Contents/Resources/guard-daemon')
-            for version in ['0.2.7','0.2.8','0.2.9','0.3.0','0.3.1','0.3.2','0.4.0','0.4.1','0.4.2','0.4.3','0.4.4','0.4.5','0.4.6','0.5.1']:
+            for version in ['0.2.7','0.2.8','0.2.9','0.3.0','0.3.1','0.3.2','0.4.0','0.4.1','0.4.2','0.4.3','0.4.4','0.4.5','0.4.6','0.5.2']:
                 with zipfile.ZipFile(project/f'dist/ClaudeSafeLauncher-{version}-test.zip','w') as archive:
                     for path in staged.rglob('*'):
                         archive.write(path,path.relative_to(staged.parent))
@@ -132,8 +135,8 @@ raise SystemExit('unexpected fixture command '+tool)
             source=source.replace('if [[ "$EUID" -ne 0 ]]; then','if false; then')
             source=source.replace('/Library/',str(base)+'/Library/').replace('/Applications/',str(base)+'/Applications/')
             source=source.replace('/private/tmp/',str(base)+'/')
-            for name,original in [('sudo','/usr/bin/sudo'),('launchctl','/bin/launchctl'),('codesign','/usr/bin/codesign'),('chown','/usr/sbin/chown'),('xattr','/usr/bin/xattr'),('ditto','/usr/bin/ditto'),('install','/usr/bin/install')]:
-                source=source.replace(original,str(tools/name))
+            for name,original in [('rm','/bin/rm'),('sudo','/usr/bin/sudo'),('launchctl','/bin/launchctl'),('codesign','/usr/bin/codesign'),('chown','/usr/sbin/chown'),('xattr','/usr/bin/xattr'),('ditto','/usr/bin/ditto'),('install','/usr/bin/install')]:
+                source=source.replace(original+' ',str(tools/name)+' ') if name=='rm' else source.replace(original,str(tools/name))
             test_script=project/'scripts'/script
             test_script.write_text(source)
             result=subprocess.run(['/bin/bash',str(test_script)],text=True,capture_output=True,
@@ -268,6 +271,13 @@ raise SystemExit('unexpected fixture command '+tool)
         result,_,service,preserved,_=self.exercise(script='uninstall.sh',failure='preferences')
         self.assertNotEqual(result.returncode,0)
         self.assertTrue(preserved and service['loaded'])
+
+    def test_uninstall_failed_app_removal_retains_recovery_helper(self):
+        result, calls, service, preserved, _ = self.exercise(script='uninstall.sh',failure='remove_app')
+        self.assertNotEqual(result.returncode,0)
+        self.assertTrue(preserved)
+        self.assertFalse(service['loaded'])
+        self.assertFalse(any(c[0]=='rm' and c[-1].endswith('/PrivilegedHelperTools/local.claudesafelauncher.guard') for c in calls))
 
     def test_uninstall_removes_delivery_without_deleting_dependencies(self):
         result,calls,service,_,_=self.exercise(script='uninstall.sh')

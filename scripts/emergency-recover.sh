@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
-if [[ "$#" -eq 1 && ( "$1" == '--force-own' || "$1" == '--last-resort' ) ]]; then
+if [[ "$#" -eq 2 && "$1" == --last-resort && "$2" == --confirm-unprotected ]] || [[ "$#" -eq 1 && ( "$1" == '--force-own' || "$1" == '--last-resort' ) ]]; then
   if [[ "$EUID" -ne 0 ]]; then exec /usr/bin/sudo /bin/bash "$0" "$@"; fi
   unset RUBYOPT RUBYLIB GEM_HOME GEM_PATH
   script_directory=$(cd "$(/usr/bin/dirname "$0")" && pwd)
-  exec /usr/bin/ruby "$script_directory/rescue-network.rb" "$1"
+  exec /usr/bin/ruby "$script_directory/rescue-network.rb" "$@"
 fi
 [[ "$#" -eq 0 ]] || { echo '用法：emergency-recover.sh [--force-own | --last-resort]'; exit 2; }
 if [[ "$EUID" -ne 0 ]]; then exec sudo /bin/bash "$0" "$@"; fi
