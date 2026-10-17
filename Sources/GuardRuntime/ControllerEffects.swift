@@ -81,7 +81,7 @@ struct ControllerEffects: Sendable {
     let verifyClaude:@Sendable ()throws->Void
     let launchClaude:@Sendable (@escaping ControllerCancellation)throws->Void
     let runProbes:ControllerProbeRunner
-    let healthProbe:@Sendable (@escaping ControllerCancellation)throws->String
+    let healthProbe:@Sendable (@escaping ControllerCancellation)throws->EgressReport
     let assertQuiescent:@Sendable ()throws->Void
     let boot:@Sendable ()->String
 
@@ -105,6 +105,6 @@ struct ControllerEffects: Sendable {
             },preflightWorker:{record,cancel in try ValidationProbes.preflightWorker(commands:commands,record:record,cancelled:cancel)},verifyClaude:{guard try codeHash(path:"/Applications/Claude.app")==installation.claudeHash else{throw fail("Claude build changed; reinstall registration")}},
             launchClaude:{cancelled in _=try commands.checked("/bin/launchctl",["asuser",String(installation.uid),"/usr/bin/sudo","-u","#"+String(installation.uid),"/usr/bin/open","-a","/Applications/Claude.app"],timeout:5,cancelled:cancelled)},
             runProbes:{policy,baseline,installedAt,record,cancelled in try ValidationProbes(pf:pf,commands:commands,record:record,cancelled:cancelled).run(policy:policy,baseline:baseline,installedAt:installedAt)},
-            healthProbe:{cancelled in try PeriodicEgress.read(cancelled:cancelled){service in try ProbeExecutor.egress(service:service,commands:commands,cancelled:cancelled)}},assertQuiescent:{try commands.assertQuiescent()},boot:{bootID()},ipv6:TemporaryIPv6())
+            healthProbe:{cancelled in PeriodicEgress.collect(cancelled:cancelled){service in try ProbeExecutor.egress(service:service,commands:commands,cancelled:cancelled)}},assertQuiescent:{try commands.assertQuiescent()},boot:{bootID()},ipv6:TemporaryIPv6())
     }
 }

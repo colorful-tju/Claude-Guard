@@ -21,3 +21,12 @@ struct PeriodicEgressTests {
         reject{_ = try PeriodicEgress.read(cancelled:{true},fetch:{_ in "1.1.1.1"})}
     }
 }
+
+struct EgressDiagnosticRegressionTests {
+    @Test func unavailableAndConflictingEvidenceMustNotShareAnError() {
+        var unavailable="",conflicting=""
+        do {_ = try PeriodicEgress.evaluate([nil,nil])}catch{unavailable=String(describing:error)}
+        do {_ = try PeriodicEgress.evaluate(["1.1.1.1","8.8.8.8"])}catch{conflicting=String(describing:error)}
+        #expect(unavailable != conflicting)
+    }
+}

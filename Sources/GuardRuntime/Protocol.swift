@@ -30,6 +30,8 @@ public struct HeartbeatDiagnostic:Codable,Sendable {
     public var delayed:Bool {(ageSeconds ?? 0)>=6}
 }
 public struct Status:Codable,Sendable {
+    public var periodicEgress:EgressDiagnostic?
+    public var egressRechecking:Bool?
     public var heartbeatDiagnostic:HeartbeatDiagnostic?
     public var blockedPackets:UInt64?
     public var blockedPacketsAt:String?

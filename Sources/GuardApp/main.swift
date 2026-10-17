@@ -189,15 +189,11 @@ private struct LauncherView:View {
                     Text(model.bannerTone == .protected ? "出口与防护验证通过 · Claude：\(model.state.claude ? "运行中":"未运行")":model.guidance.action).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(model.guidance.action)
                 }
                 Spacer(minLength:4)
-                VStack(alignment:.trailing,spacing:2) {
-                    HStack(spacing:5) {
-                        Image(systemName:"shield.checkered").font(.caption)
-                        Text("已阻断数据包").font(.caption.weight(.medium))
-                        Text(model.blockCountText).font(.system(size:20,weight:.semibold,design:.rounded)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
-                    }
-                    Text(model.blockCountCaption).font(.system(size:10)).foregroundStyle(.secondary)
-                }.frame(width:175,alignment:.trailing).padding(.horizontal,10).padding(.vertical,5)
-                 .background(bannerColor.opacity(0.08),in:RoundedRectangle(cornerRadius:12)).help(model.blockCountHelp)
+                Text("已阻断数据包 \(model.blockCountText) 次")
+                    .font(.system(size:20,weight:.semibold,design:.rounded)).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.7).frame(width:250,alignment:.trailing)
+                    .padding(.horizontal,12).padding(.vertical,10)
+                    .background(bannerColor.opacity(0.08),in:RoundedRectangle(cornerRadius:12)).help(model.blockCountHelp)
                 Text(model.state.phase.uppercased()).font(.subheadline.bold().monospaced()).foregroundStyle(bannerColor)
             }.padding(.horizontal,16).padding(.vertical,10).frame(maxWidth:.infinity,alignment:.leading)
              .background(bannerColor.opacity(0.12),in:RoundedRectangle(cornerRadius:18)).modifier(GlassSurface())

@@ -22,6 +22,9 @@ import GuardCore
     }
     public var guidance:Guidance {
         if state.phase=="off",!busy,failure.isEmpty,needsIPv6Off {return Guidance.reason("IPv6 default route detected")}
+        if state.phase=="armed",state.egressRechecking==true,failure.isEmpty {
+            return .init("网络复核","出口暂未重新确认，正在有限重试","PF 与本地安全检查继续运行；持续失败将自动关闭 Claude。")
+        }
         return Guidance.current(state,failure:failure,busy:busy,confirmation:confirmation,ip:ipCheck,stale:ipStale || ipCheck?.expected != settings.expectedEgress)
     }
     @Published public var settings=Settings() {didSet {

@@ -27,6 +27,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     var beforeDiagnostic:(()->Void)?
     var beforeVerify:(()->Void)?
     var beforeProbe:(()->Void)?
+    var healthOverride:(@Sendable ()throws->EgressReport)?
     var afterStage:((String)->Void)?
     var busyWorkers=false,uiPresent=true
     var claude:[ProcessRecord]=[]
@@ -54,7 +55,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
                 return .init(sessionID:policy.sessionID,startedAt:startedAt,baseline:baseline,
                     egress:EgressService.allCases.map{.init(sessionID:policy.sessionID,epoch:baseline.epoch,ruleFingerprint:policy.rulesFingerprint,service:$0,ipv4:"1.1.1.1",bypassesSystemProxy:true,tlsVerified:true,measuredAt:measured)},
                     negative:[ProbeKind.boundTCP,.boundUDP,.boundSTUN].map{.init(kind:$0,sessionID:policy.sessionID,epoch:baseline.epoch,ruleFingerprint:policy.rulesFingerprint,dedicatedLabel:policy.probeLabel($0),tupleMatched:true,failed:true,counterBefore:0,counterAfter:1,measuredAt:measured)})
-            },healthProbe:{_ in throw fail("Unexpected real health work in test")},assertQuiescent:{[self] in try step("quiescent");if busyWorkers{throw fail("workers active")}},boot:{"00000000-0000-0000-0000-000000000001"},ipv6:ipv6)
+            },healthProbe:{[self] _ in if let healthOverride{return try healthOverride()};throw fail("Injected echo failure")},assertQuiescent:{[self] in try step("quiescent");if busyWorkers{throw fail("workers active")}},boot:{"00000000-0000-0000-0000-000000000001"},ipv6:ipv6)
         let value=try Controller(installation:installation,effects:effects);controller=value;return value
     }
     func node() throws -> NodeConfiguration {.init(name:"Webshare-Canada",type:"http",server:"23.20.10.8",port:5376,fingerprint:"config",numeric:true,tunDevice:"utun4")}
@@ -316,9 +317,16 @@ struct MonitoringHealthDiagnosticTests {
     @Test func failedAsynchronousHealthEchoDoesNotPretendToHaveAFailedLocalSnapshot() throws {
         let f=try LifecycleFixture(),c=try f.makeController()
         try c.queue.sync {c.heartbeat();try c.begin(f.settings,launch:false);f.clock.advance(16);c.heartbeat();c.tick()}
-        for _ in 0..<100 {
-            if c.queue.sync(execute:{c.status.phase=="off"}){break}
-            Thread.sleep(forTimeInterval:0.005)
+        for round in 1...3 {
+            for _ in 0..<100 {
+                if c.queue.sync(execute:{(c.status.periodicEgress?.failures ?? 0)>=round}){break}
+                Thread.sleep(forTimeInterval:0.005)
+            }
+            if round<3 {
+                #expect(c.queue.sync{c.status.phase}=="armed")
+                #expect(c.queue.sync{c.status.egressRechecking}==true)
+                c.queue.sync {f.clock.advance(2);c.heartbeat();c.tick()}
+            }
         }
         #expect(c.queue.sync{c.status.phase}=="off")
         let data=try Data(contentsOf:URL(fileURLWithPath:f.root+"/last-monitoring-failure.json"))
@@ -650,5 +658,40 @@ struct BlockStatisticsLifecycleTests {
         f.invalidLabels=false;f.denyPackets+=2;c.tick();#expect(c.status.blockedPackets==2)
         f.denyPackets=0;c.tick();#expect(c.status.blockedPackets==nil && c.status.phase=="armed")
         f.denyPackets=100;c.tick();#expect(c.status.blockedPackets==nil) // Reset invalidates baseline for this session.
+    }
+}
+
+struct PeriodicEgressControllerTests {
+    func waitForResult(_ c:Controller) {
+        for _ in 0..<200 {
+            if c.queue.sync(execute:{c.status.periodicEgress != nil}) {return}
+            Thread.sleep(forTimeInterval:0.005)
+        }
+    }
+    @Test func realControllerRejectsMismatchingReportWithoutRetry() throws {
+        let f=try LifecycleFixture(),c=try f.makeController()
+        f.healthOverride={let now=f.clock.sample().uptime;return EgressMonitorTests().report("8.8.8.8","1.1.1.1",finished:now)}
+        try c.queue.sync {c.heartbeat();try c.begin(f.settings,launch:false);f.clock.advance(15);c.heartbeat();c.tick()}
+        waitForResult(c)
+        #expect(c.queue.sync{c.status.phase}=="off")
+        #expect(c.queue.sync{c.status.lastRisk}=="Periodic egress mismatch")
+        #expect(c.queue.sync{c.status.periodicEgress?.report.samples.first?.ip}=="8.8.8.8")
+    }
+    @Test func queuedCorrectResultRetainsPFButPFChangeStillStopsWhileRechecking() throws {
+        let f=try LifecycleFixture(),c=try f.makeController()
+        f.healthOverride={let now=f.clock.sample().uptime;return EgressMonitorTests().report("1.1.1.1","1.1.1.1",finished:now-11)}
+        try c.queue.sync {c.heartbeat();try c.begin(f.settings,launch:false);f.clock.advance(15);c.heartbeat();c.tick()}
+        waitForResult(c)
+        #expect(c.queue.sync{c.status.phase}=="armed" && f.reference && !f.rules.isEmpty)
+        #expect(c.queue.sync{c.status.periodicEgress?.decision}=="retry: result-stale")
+        c.queue.sync {f.rules="tampered";c.heartbeat();c.tick()}
+        #expect(c.queue.sync{c.status.phase} != "armed")
+        #expect(f.calls.contains("terminate"))
+    }
+    @Test func missingFreshProofStopsEvenWithoutCompletedProbeCallback() throws {
+        let f=try LifecycleFixture(),c=try f.makeController()
+        try c.queue.sync {c.heartbeat();try c.begin(f.settings,launch:false);f.clock.advance(45);c.heartbeat();c.tick()}
+        #expect(c.queue.sync{c.status.phase}=="off")
+        #expect(c.queue.sync{c.status.lastRisk.contains("Periodic egress proof expired")})
     }
 }

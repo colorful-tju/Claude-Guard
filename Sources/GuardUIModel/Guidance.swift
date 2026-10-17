@@ -10,6 +10,12 @@ public struct Guidance:Equatable {
         if raw.contains("IPv6 default route detected") {
             return .init("需要操作","当前 IPv6 路径不受本版支持","保持 OFF，退出 Claude/Code，点击「临时 IPv6 · 关闭」后重新验证。")
         }
+        if raw.contains("Periodic egress mismatch") {
+            return .init("出口异常","检测到非预期公网出口，已停止会话","核对节点与预期 IP；原始检测地址保存在反馈中。未单凭此判定国内 IP 已泄漏。",severe:true)
+        }
+        if raw.contains("Periodic egress retry limit") || raw.contains("Periodic egress proof expired") {
+            return .init("核验中断","出口核验持续失败或超过时限","已保守停止 Claude。请检查代理连通性并导出反馈；这不等于检测到了不同 IP。")
+        }
         if raw.contains("Expected egress mismatch") || raw.contains("Periodic egress") {
             return .init("网络未通过","出口不匹配或检测服务无法完成核验","检查 已登记代理 节点及 IP 检测结果；网络稳定后重新验证。未据此认定已泄漏。")
         }

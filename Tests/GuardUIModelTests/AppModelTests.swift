@@ -147,9 +147,9 @@ struct HeartbeatTransientFailureTests {
         m.state.phase="armed";m.state.verified=true
         m.state.heartbeatDiagnostic = .init(ageSeconds:10,maxGapSeconds:10,limitSeconds:30)
         #expect(m.bannerTone == .waiting && m.bannerTitle.contains("响应延迟"))
-        #expect(m.blockCountText=="—" && m.blockCountCaption=="统计暂不可用")
+        #expect(m.blockCountText=="—")
         m.state.blockedPackets=0
-        #expect(m.blockCountText=="0" && m.blockCountCaption.contains("整机"))
-        m.state.phase="off";#expect(m.blockCountCaption.contains("上次会话"))
+        #expect(m.blockCountText=="0" && m.blockCountHelp.contains("整机"))
+        m.state.phase="off";#expect(m.blockCountHelp.contains("上次会话"))
     }
 }
