@@ -2,6 +2,8 @@ import Foundation
 
 /// Local diagnostic record, never permission to arm and never a replacement baseline.
 public struct ValidationDiagnostics:Codable,Sendable {
+    public var networkEvents:[String]?
+    public var attempt:Int?
     public let sessionID:UUID
     public let capturedAt:String
     public let changedFields:[String]

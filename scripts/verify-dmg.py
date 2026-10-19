@@ -6,7 +6,7 @@ root=Path(__file__).resolve().parent.parent
 arch=sys.argv[1] if len(sys.argv)>1 else 'arm64'
 assert arch in ('arm64','x86_64')
 platform='AppleSilicon' if arch=='arm64' else 'Intel'
-image=root/f'dist/Claude-Guard-0.5.11-macOS-{platform}-{arch}.dmg'
+image=root/f'dist/Claude-Guard-0.5.12-macOS-{platform}-{arch}.dmg'
 def run(*args):return subprocess.run(args,check=True,capture_output=True).stdout
 mount=None
 try:
@@ -16,7 +16,7 @@ try:
         app=mount/(name+'.app')
         run('/usr/bin/codesign','--verify','--strict','--deep',str(app))
         info=plistlib.loads((app/'Contents/Info.plist').read_bytes())
-        assert info['CFBundleShortVersionString']=='0.5.11'
+        assert info['CFBundleShortVersionString']=='0.5.12'
         assert (app/'Contents/Resources/applet.icns').stat().st_size>1000
     assert {p.name for p in mount.iterdir() if not p.name.startswith('.')} == {'双击安装 Claude Guard.app','移除 Claude Guard.app','请先阅读：先卸载旧版再安装新版.txt'}
     remover=mount/'移除 Claude Guard.app'
@@ -35,11 +35,11 @@ try:
     assert (mount/'双击安装 Claude Guard.app/Contents/Resources/Recovery/恢复说明.md').read_bytes()==(root/'docs/完整验证手册.md').read_bytes()
     with tempfile.TemporaryDirectory(prefix='guard-dmg-audit-') as tmp:
         tmp=Path(tmp)
-        run('/usr/bin/ditto','-x','-k',str(payload/'dist/ClaudeSafeLauncher-0.5.11-test.zip'),str(tmp))
+        run('/usr/bin/ditto','-x','-k',str(payload/'dist/ClaudeSafeLauncher-0.5.12-test.zip'),str(tmp))
         app=tmp/'ClaudeSafeLauncher.app'
         run('/usr/bin/codesign','--verify','--strict','--deep',str(app))
         info=plistlib.loads((app/'Contents/Info.plist').read_bytes())
-        assert info['CFBundleVersion']=='38' and info['CFBundleIconFile']=='AppIcon'
+        assert info['CFBundleVersion']=='39' and info['CFBundleIconFile']=='AppIcon'
         assert run('/usr/bin/lipo','-archs',str(app/'Contents/MacOS/ClaudeSafeLauncher')).strip()==arch.encode()
         resources=app/'Contents/Resources'
         assert (resources/'技术与功能详解.md').read_bytes()==(root/'docs/技术与功能详解.md').read_bytes()
@@ -60,6 +60,6 @@ try:
             print(run(str(resources/'guard-probe'),'--self-test').decode().strip())
             print(run(str(resources/'guard-daemon'),'--self-test-timer').decode().strip())
         else: print('Intel cross-build: static verification only; no Intel hardware acceptance')
-    print(f'PASS DMG: installer signed; payload matches; {arch} build38; ten icon sizes; recovery parity')
+    print(f'PASS DMG: installer signed; payload matches; {arch} build39; ten icon sizes; recovery parity')
 finally:
     if mount is not None:run('/usr/bin/hdiutil','detach',str(mount))

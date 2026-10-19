@@ -3,6 +3,29 @@ import Testing
 @testable import GuardCore
 
 struct SessionTests {
+    @Test func retryCannotReuseOldProbeResultsOrRetryTwice() throws {
+        let p=try fixturePolicy(),b=fixtureBundle(p)
+        var s=SafetySession(policy:p)
+        _=try s.begin();_=try s.preflightAccepted(b.baseline);_=try s.protectionInstalled(b.baseline,now:b.startedAt)
+        var next=b.baseline;next.epoch += 1
+        try s.retryValidation(b,new:next,now:100)
+        expectThrows(try s.retryValidation(b,new:next,now:100))
+        expectThrows(try s.arm(b,final:next,now:100))
+        #expect(s.phase == .stopping)
+    }
+    @Test func retryRejectsInvalidOldProofOrChangedProtection() throws {
+        for kind in ["missing-probe","rules","interface","claude"] {
+            let p=try fixturePolicy();var b=fixtureBundle(p);var s=SafetySession(policy:p)
+            _=try s.begin();_=try s.preflightAccepted(b.baseline);_=try s.protectionInstalled(b.baseline,now:b.startedAt)
+            var next=b.baseline;next.epoch += 1
+            if kind=="missing-probe" {b.negative=[]}
+            if kind=="rules" {next.rulesFingerprint="changed"}
+            if kind=="interface" {next.verifiedTun.generation += 1}
+            if kind=="claude" {next.claudeProcesses=[.init(pid:99,startTime:1,executableIdentity:"claude")]}
+            expectThrows(try s.retryValidation(b,new:next,now:100))
+        }
+    }
+
     @Test func orderedStartAndRecovery() throws {
         let p = try fixturePolicy(); let b = fixtureBundle(p)
         var s = SafetySession(policy: p)

@@ -12,6 +12,7 @@ public struct SafetySession: Sendable, Codable {
     private var installedSnapshot: LocalSnapshot?
     private var consumed = false
     private var installedAt: UInt64?
+    private var validationRetries = 0
     public init(policy: GuardPolicy) { self.policy = policy }
     public init(recovering policy: GuardPolicy) { self.policy = policy; consumed = true; phase = .stopping; pendingAction = .terminateClaude }
     public mutating func begin() throws -> SessionAction {
@@ -37,11 +38,29 @@ public struct SafetySession: Sendable, Codable {
             before.pfEnabled = snapshot.pfEnabled; before.ownReference = snapshot.ownReference
             before.rulesFingerprint = snapshot.rulesFingerprint; before.rulesAreStateless = snapshot.rulesAreStateless
             before.anchorReachable = snapshot.anchorReachable
+            // PF is already installed and no probes have run yet. A routing-only
+            // epoch advance may establish the first protected probe baseline.
+            if before.differingFields(from:snapshot)==["epoch"],snapshot.epoch>before.epoch {before.epoch=snapshot.epoch}
             guard before == snapshot else { throw GuardFailure.rejected("Premises changed during PF installation") }
         }
         catch { _ = stop(reason: String(describing: error)); throw error }
         installedAt = now; installedSnapshot = snapshot; phase = .validating; pendingAction = .runProbes
         return pendingAction
+    }
+    /// Rebase only after validating the completed old probes against their own
+    /// baseline. No result is relabelled: callers must run ALL probes again.
+    public mutating func retryValidation(_ bundle:ValidationBundle,new snapshot:LocalSnapshot,now:UInt64) throws {
+        guard phase == .validating,validationRetries==0,
+              bundle.baseline==installedSnapshot,bundle.startedAt==installedAt else {
+            throw GuardFailure.rejected("Startup validation retry unavailable")
+        }
+        try SafetyGate.validate(bundle,final:bundle.baseline,policy:policy,now:now)
+        try SafetyGate.validateLocal(snapshot,policy:policy)
+        guard bundle.baseline.differingFields(from:snapshot)==["epoch"],snapshot.epoch>bundle.baseline.epoch else {
+            throw GuardFailure.rejected("Startup retry requires routing-only epoch change")
+        }
+        validationRetries=1;installedSnapshot=snapshot;installedAt=now
+        pendingAction = .runProbes
     }
     public mutating func arm(_ bundle: ValidationBundle, final: LocalSnapshot, now: UInt64) throws -> SessionAction {
         guard phase == .validating else { throw GuardFailure.invalidTransition("Not validating") }

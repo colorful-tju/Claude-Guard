@@ -28,6 +28,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     var beforeView:((Int)->Void)?
     var beforeDiagnostic:(()->Void)?
     var beforeVerify:(()->Void)?
+    var onLaunch:(()->Void)?
     var beforeProbe:(()->Void)?
     var healthOverride:(@Sendable ()throws->EgressReport)?
     var afterStage:((String)->Void)?
@@ -50,7 +51,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
             inventory:{[self] in .init(records:claude,issues:[])},
             terminateClaude:{[self] in try step("terminate");claude=[]},observeSockets:{[self] policy,_ in try step("sockets");return SocketObservationReport.collect(policy:policy,processes:claude.map(\.identity),readProcess:{pid in try #require(self.claude.first{$0.pid==pid})},readSockets:{_ in self.socketRows})},
             preflightWorker:{[self] _,_ in try step("worker-preflight");return "test-worker"},verifyClaude:{[self] in try step("verify-app");beforeVerify?()},
-            launchClaude:{[self] cancelled in try step("launch");if cancelled(){throw fail("cancelled launch")};launches += 1},
+            launchClaude:{[self] cancelled in try step("launch");if cancelled(){throw fail("cancelled launch")};launches += 1;onLaunch?()},
             runProbes:{[self] policy,baseline,startedAt,record,cancelled in
                 try step("probes");beforeProbe?();if cancelled(){throw fail("cancelled probes")};try record("fake probe complete")
                 let measured=UInt64(clock.sample().uptime)
@@ -98,6 +99,61 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
 }
 
 struct ControllerLifecycleTests {
+    @Test func ordinaryEpochAtPFInstallationStillGetsCompleteProbes() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        f.afterStage={if $0=="protected" {f.epochValue += 1}}
+        try c.begin(f.settings,launch:true)
+        #expect(f.launches==1 && c.status.phase=="armed")
+        #expect(f.calls.filter{$0=="probes"}.count==1)
+    }
+    @Test func armedLaunchBoundaryEventsAreRevalidatedButIdentityChangeStops() throws {
+        for stage in ["armed","launch"] {
+            for dangerous in [false,true] {
+                let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+                f.routeFingerprint=hash(Data(f.routeDetail.utf8))
+                let change={f.epochValue += 1;if dangerous {f.identityGeneration += 1}}
+                if stage=="armed" {f.afterStage={if $0=="armed" {change()}}}
+                else {f.onLaunch=change}
+                if dangerous {reject{try c.begin(f.settings,launch:true)};#expect(c.status.phase=="off")}
+                else {try c.begin(f.settings,launch:true);#expect(c.status.phase=="armed" && f.launches==1)}
+            }
+        }
+    }
+    @Test func retryRejectsRealChangeAndHonorsOFFBeforeSecondProbe() throws {
+        for kind in ["interface","path","cancel"] {
+            let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+            f.beforeProbe={
+                if f.calls.filter({$0=="probes"}).count==1 {
+                    f.epochValue += 1
+                    if kind=="interface" {f.identityGeneration += 1}
+                    if kind=="path" {f.routeFingerprint="changed"}
+                } else if kind=="cancel" {c.requestStop()}
+            }
+            reject{try c.begin(f.settings,launch:true)}
+            #expect(f.launches==0 && c.status.phase=="off")
+            #expect(f.calls.filter{$0=="probes"}.count == (kind=="cancel" ? 2:1))
+            #expect(c.status.report.contains("startup network-event"))
+        }
+    }
+
+    @Test func singleRouteEventRerunsAllStartupProbesBeforeLaunch() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        f.beforeProbe={if f.calls.filter({$0=="probes"}).count==1 {f.epochValue += 1}}
+        try c.begin(f.settings,launch:true)
+        #expect(c.status.phase=="armed" && f.launches==1)
+        #expect(f.calls.filter{$0=="probes"}.count==2)
+        #expect(f.calls.filter{$0=="enable"}.count==1)
+        #expect(!f.calls.contains("remove-rules"))
+        #expect(c.status.report.contains("startup validation retry"))
+    }
+    @Test func singleRouteEventDuringAppCheckAlsoRerunsProbes() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        f.beforeVerify={if f.calls.filter({$0=="verify-app"}).count==1 {f.epochValue += 1}}
+        try c.begin(f.settings,launch:true)
+        #expect(c.status.phase=="armed" && f.launches==1)
+        #expect(f.calls.filter{$0=="probes"}.count==2)
+    }
+
     @Test func offlineSelfTestDoesNotTouchProtectionOrLaunchClaude() throws {
         let f=try LifecycleFixture(),c=try f.makeController();f.calls=[];c.heartbeat()
         let reply=c.handle(.init(.selfTest))
@@ -381,12 +437,17 @@ struct PublicRouteCloneLifecycleTests {
             #expect(f.calls.contains("terminate"))
         }
     }
-    @Test func startupStillRejectsRouteNotificationEvenWhenPathsMatch() throws {
+    @Test func repeatedStartupRouteNotificationsExhaustOneRetry() throws {
         let f=try LifecycleFixture(),c=try f.makeController()
         f.routeFingerprint=hash(Data(f.routeDetail.utf8))
         c.heartbeat();f.beforeProbe={f.epochValue += 1}
         reject {try c.begin(f.settings,launch:true)}
         #expect(f.launches==0)
+        #expect(f.calls.filter{$0=="probes"}.count==2)
+        #expect(c.status.lastRisk.contains("retry exhausted"))
+        let data=try Data(contentsOf:URL(fileURLWithPath:f.root+"/last-validation.json"))
+        let diagnostic=try JSONDecoder().decode(ValidationDiagnostics.self,from:data)
+        #expect(diagnostic.attempt==2 && diagnostic.networkEvents?.isEmpty==false)
     }
     @Test func routeNotificationWithIdenticalProtectedEvidenceDoesNotStop() throws {
         let f=try LifecycleFixture(),c=try f.makeController()

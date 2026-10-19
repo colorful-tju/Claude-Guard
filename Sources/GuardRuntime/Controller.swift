@@ -157,50 +157,86 @@ public final class Controller: @unchecked Sendable {
             try pf.activateRules(policy,expected:journal!.expectedCanonicalRules);try requireActive()
             journal!.stage="enabling";try persist();try requireActive()
             journal!.token=try pf.enable(cancelled:{[self] in cancelled()});journal!.stage="protected";try persist();try requireActive()
-            let protectedEvidence=try inspector.runtime(settings:settings)
-            let protected=try snapshot(protectedEvidence,policy:policy);let installedAt=seconds()
+            var protectedEvidence=try inspector.runtime(settings:settings)
+            var protected=try snapshot(protectedEvidence,policy:policy);var installedAt=seconds()
             _=try session!.protectionInstalled(protected,now:installedAt);status.phase="validating";status.udp="验证中"
             log("PF installed; starting probes session=\(policy.sessionID) epoch=\(protected.epoch)")
-            let bundle=try effects.runProbes(policy,protected,installedAt,{[self] in try recordProbe($0)},{[self] in cancelled()})
-            try requireActive()
-            for result in bundle.negative{log("probe=\(result.kind.rawValue) label=\(result.dedicatedLabel) counter=\(result.counterBefore)->\(result.counterAfter) blocked=true measuredAt=\(result.measuredAt)")}
-            for result in bundle.egress{log("echo=\(result.service.rawValue) ipv4=\(result.ipv4) measuredAt=\(result.measuredAt)")}
-            let finalEvidence=try inspector.runtime(settings:settings)
-            let final=try snapshot(finalEvidence,policy:policy)
-            // Final snapshot follows all startup probes: do not count them as user traffic.
+            var bundle:ValidationBundle
+            var finalEvidence=protectedEvidence,final=protected
+            var attempt=1
+            while true {
+                bundle=try effects.runProbes(policy,protected,installedAt,{[self] in try recordProbe($0)},{[self] in cancelled()})
+                try requireActive()
+                for result in bundle.negative{log("probe=\(result.kind.rawValue) label=\(result.dedicatedLabel) counter=\(result.counterBefore)->\(result.counterAfter) blocked=true measuredAt=\(result.measuredAt)")}
+                for result in bundle.egress{log("echo=\(result.service.rawValue) ipv4=\(result.ipv4) measuredAt=\(result.measuredAt)")}
+                // Include app identity verification in the final-snapshot window.
+                if launch {try effects.verifyClaude();try requireActive()}
+                finalEvidence=try inspector.runtime(settings:settings)
+                final=try snapshot(finalEvidence,policy:policy)
+                var diagnostic=ValidationDiagnostics(bundle:bundle,final:final,routesBefore:protectedEvidence.routeDetail,routesAfter:finalEvidence.routeDetail)
+                diagnostic.attempt=attempt;diagnostic.networkEvents=inspector.networkEventDiagnostics()
+                _=try diagnostic.encoded();try storage.writeDiagnostic(diagnostic)
+                log("final snapshot session=\(policy.sessionID) attempt=\(attempt) changed=\(diagnostic.changedFields.joined(separator:",")) epoch=\(protected.epoch)->\(final.epoch) localPort=\(protected.connection.localPort)->\(final.connection.localPort) elapsed=\(seconds()-installedAt)s")
+                try requireActive();try requireEpoch(final.epoch)
+                if attempt==1,diagnostic.changedFields==["epoch"],final.epoch>protected.epoch {
+                    try effects.assertQuiescent()
+                    let retryAt=seconds()
+                    try session!.retryValidation(bundle,new:final,now:retryAt)
+                    attempt=2;protected=final;protectedEvidence=finalEvidence;installedAt=retryAt
+                    status.message="路由通知发生变化，防护保持开启；正在重新完整验证（第 2/2 轮）"
+                    log("startup validation retry 2/2; PF retained; all probes discarded and rerun epoch=\(final.epoch); 路由通知变化，保持防护并重新完整验证（2/2）")
+                    continue
+                }
+                if attempt==2,diagnostic.changedFields==["epoch"] {throw fail("Startup validation retry exhausted: epoch")}
+                _=try session!.arm(bundle,final:final,now:seconds())
+                break
+            }
+            // Neither first nor retry probes count as user blocked traffic.
             blockedStatistics=try? BlockedPacketStatistics(policy:policy,text:latestLabels)
-            updateBlockStatistics()
-            let diagnostic=ValidationDiagnostics(bundle:bundle,final:final,routesBefore:protectedEvidence.routeDetail,routesAfter:finalEvidence.routeDetail)
-            _=try diagnostic.encoded()
-            try storage.writeDiagnostic(diagnostic)
-            log("final snapshot session=\(policy.sessionID) changed=\(diagnostic.changedFields.joined(separator:",")) epoch=\(protected.epoch)->\(final.epoch) localPort=\(protected.connection.localPort)->\(final.connection.localPort) elapsed=\(seconds()-installedAt)s")
-            try requireActive();try requireEpoch(final.epoch)
-            _=try session!.arm(bundle,final:final,now:seconds());baseline=final
+            updateBlockStatistics();baseline=final
             baselineRoutes=finalEvidence.routeDetail;previousHealthy=final;previousRoutes=finalEvidence.routeDetail
             previousHealthyAt=ISO8601DateFormatter().string(from:Date())
             journal!.stage="armed";try persist();status.phase="armed";status.verified=true;status.udp="ON（实包及计数已验证）";status.monitor="PF 防护运行；socket 仅诊断，不凭创建连接判泄漏";lastSocketObservation=nil
             status.gateway="\(policy.endpoint.gateway):\(policy.endpoint.port)";status.egress=policy.endpoint.expectedEgress;status.physical=policy.physical.name;status.tun=policy.tun.name
             status.ipv6="无默认路由；未完成 IPv6 实包验证";status.country="地区未核验；仅验证预期 IPv4";status.flclash=true
             log("ARMED session=\(policy.sessionID) gateway=\(status.gateway) egress=\(status.egress) interfaces=\(status.physical),\(status.tun)")
-            try requireActive();try requireEpoch(final.epoch)
+            try requireActive()
             try SafetyGate.validate(bundle,final:final,policy:policy,now:seconds())
+            try verifyArmedEpoch(policy:policy,baseline:final,routes:finalEvidence.routeDetail,claudeMustBeAbsent:true)
             guard status.verified else{throw fail("Cannot persist security event log")}
             if launch {
-                try effects.verifyClaude()
-                try requireActive();try requireEpoch(final.epoch)
-                try SafetyGate.validate(bundle,final:final,policy:policy,now:seconds())
+                try requireActive()
                 try effects.launchClaude({[self] in cancelled()})
-                try requireActive();try requireEpoch(final.epoch)
                 launched=true
+                try requireActive()
+                try verifyArmedEpoch(policy:policy,baseline:final,routes:finalEvidence.routeDetail,claudeMustBeAbsent:false)
             }
             status.message=launch ? "Claude 已安全启动（测试版）" : "防护验收通过；未启动 Claude。请完成 OFF 和恢复测试"
             egressMonitor=EgressMonitor(verifiedAt:effects.clock.sample().uptime);activity.allowProtectedGrace()
         }catch {
             let cause=String(describing:error);status.lastRisk=cause;log("start rejected: \(cause)")
+            let startupEvents=inspector.networkEventDiagnostics()
             if journal != nil {do{try stop(reason:cause,restoreIPv6:false)}catch{status.phase="recoveryBlocked";status.verified=false}}
             else {activity.finish();status.phase="off";status.message=cause+"；本次未加载本工具 PF 防护"}
+            for event in startupEvents {log("startup network-event \(event)")}
             throw error
         }
+    }
+    /// A completed ARMED proof is retained, never an incomplete startup proof.
+    /// Ordinary notifications at the launch boundary use the same full local
+    /// revalidation as running sessions; lifecycle/path/PF changes still fail.
+    private func verifyArmedEpoch(policy:GuardPolicy,baseline:LocalSnapshot,routes:String,claudeMustBeAbsent:Bool) throws {
+        guard try inspector.epoch() != (previousHealthy?.epoch ?? baseline.epoch) else{return}
+        guard let settings else{throw fail("Runtime settings unavailable")}
+        let evidence=try inspector.runtime(settings:settings)
+        let current=try snapshot(evidence,policy:policy)
+        guard !claudeMustBeAbsent || current.claudeProcesses.isEmpty else{throw fail("Claude appeared before protected launch")}
+        let compared=MonitoringRouteEvidence.revalidated(current,baseline:baseline,currentRoutes:evidence.routeDetail,baselineRoutes:routes,policy:policy)
+        try MonitoringGate.validate(compared,baseline:baseline,policy:policy)
+        try requireActive();try requireEpoch(current.epoch)
+        log("armed launch-boundary route notification revalidated epoch=\(current.epoch)")
+        previousHealthy=current;previousRoutes=evidence.routeDetail
+        previousHealthyAt=ISO8601DateFormatter().string(from:Date())
     }
     public func tick() {
         if serviceRequestedStop(){return}

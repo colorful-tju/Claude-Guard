@@ -7,6 +7,9 @@ public struct Guidance:Equatable {
     public let severe:Bool
     public init(_ category:String,_ title:String,_ action:String,severe:Bool=false){self.category=category;self.title=title;self.action=action;self.severe=severe}
     public static func reason(_ raw:String)->Guidance {
+        if raw.contains("Startup validation retry exhausted") {
+            return .init("启动未通过","完整验证已重试一次，网络仍在变化","Claude 未启动。先等待网络稳定；若反复出现请导出反馈，不等于已检测到泄漏。")
+        }
         if raw.contains("IPv6 default route detected") {
             return .init("需要操作","当前 IPv6 路径不受本版支持","保持 OFF，退出 Claude/Code，点击「临时 IPv6 · 关闭」后重新验证。")
         }

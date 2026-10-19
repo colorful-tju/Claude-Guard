@@ -16,7 +16,7 @@ helper="/Library/PrivilegedHelperTools/$label"
 plist="/Library/LaunchDaemons/$label.plist"
 [[ ! -L "$root" && ! -L "$app" && ( ! -e "$root" || -d "$root" ) ]] || { echo '拒绝不可信安装目标'; exit 2; }
 [[ ! -e "$root/ipv6-override.json" && ! -L "$root/ipv6-override.json" && ! -e "$root/session.json" && ! -L "$root/session.json" ]] || { echo '存在安全事务，请先关闭安全模式或完成紧急恢复，不能更新。'; exit 2; }
-archive="$PWD/dist/ClaudeSafeLauncher-0.5.11-test.zip"
+archive="$PWD/dist/ClaudeSafeLauncher-0.5.12-test.zip"
 [[ -f "$archive" && ! -L "$archive" ]] || { echo '安装资源缺失，请重新获取完整磁盘映像。'; exit 2; }
 # Separate from daemon.lock: serialize delivery changes without bypassing the
 # helper's authoritative OFF assertion under the daemon transaction lock.
