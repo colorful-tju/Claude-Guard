@@ -385,15 +385,13 @@ struct MonitoringHealthDiagnosticTests {
             if round<3 {
                 #expect(c.queue.sync{c.status.phase}=="armed")
                 #expect(c.queue.sync{c.status.egressRechecking}==true)
-                c.queue.sync {f.clock.advance(round==1 ? 6:10);c.heartbeat();c.tick()}
+                c.queue.sync {f.clock.advance(300);c.heartbeat();c.tick()}
             }
         }
-        #expect(c.queue.sync{c.status.phase}=="off")
-        let data=try Data(contentsOf:URL(fileURLWithPath:f.root+"/last-monitoring-failure.json"))
-        let value=try #require(JSONSerialization.jsonObject(with:data) as? [String:Any])
-        #expect(value["stage"] as? String=="periodicEgress")
-        #expect(value["currentComplete"] as? Bool==false)
-        #expect(value["recoveryPhase"] as? String=="off")
+        #expect(c.queue.sync{c.status.phase}=="armed")
+        #expect(c.queue.sync{c.status.egressWarning != nil && c.status.periodicEgress?.failures==3})
+        #expect(!FileManager.default.fileExists(atPath:f.root+"/last-monitoring-failure.json"))
+        #expect(c.queue.sync{f.reference && !f.rules.isEmpty && !f.calls.contains("terminate")})
     }
 }
 
@@ -794,6 +792,38 @@ struct PeriodicEgressControllerTests {
             } else {#expect(c.queue.sync{c.status.phase} != "armed")}
         }
     }
+    @Test func unavailableEgressWarnsAfterFiveMinutesWithoutRemovingProtection() throws {
+        let f=try LifecycleFixture(),c=try f.makeController()
+        f.healthOverride={let now=f.clock.sample().uptime;return EgressMonitorTests().report(nil,nil,finished:now)}
+        func awaitFailures(_ count:Int) {
+            for _ in 0..<200 {
+                if c.queue.sync(execute:{c.status.periodicEgress?.failures==count}) {return}
+                Thread.sleep(forTimeInterval:0.005)
+            }
+        }
+        try c.queue.sync {c.heartbeat();try c.begin(f.settings,launch:false);f.clock.advance(15);c.heartbeat();c.tick()}
+        awaitFailures(1)
+        #expect(c.queue.sync{c.status.egressRechecking==true && c.status.egressWarning==nil && c.status.phase=="armed"})
+        #expect(c.queue.sync{c.status.periodicEgress?.retryAfterSeconds}==300)
+        c.queue.sync {f.clock.advance(299);c.heartbeat();c.tick()}
+        #expect(c.queue.sync{c.status.periodicEgress?.failures}==1)
+        c.queue.sync {f.clock.advance(1);c.heartbeat();c.tick()}
+        awaitFailures(2)
+        let id=c.queue.sync{c.status.egressWarning?.id}
+        #expect(id != nil)
+        #expect(c.queue.sync{c.status.phase=="armed" && f.reference && !f.rules.isEmpty && !f.calls.contains("terminate")})
+        c.queue.sync {f.clock.advance(300);c.heartbeat();c.tick()}
+        awaitFailures(3)
+        #expect(c.queue.sync{c.status.egressWarning?.id}==id)
+        f.healthOverride={let now=f.clock.sample().uptime;return EgressMonitorTests().report("1.1.1.1",nil,finished:now)}
+        c.queue.sync {f.clock.advance(300);c.heartbeat();c.tick()}
+        awaitFailures(0)
+        #expect(c.queue.sync{c.status.egressWarning==nil && c.status.egressRechecking==false && c.status.phase=="armed"})
+        f.healthOverride={let now=f.clock.sample().uptime;return EgressMonitorTests().report("8.8.8.8",nil,finished:now)}
+        c.queue.sync {f.clock.advance(15);c.heartbeat();c.tick()}
+        for _ in 0..<200 {if c.queue.sync(execute:{c.status.phase=="off"}) {break};Thread.sleep(forTimeInterval:0.005)}
+        #expect(c.queue.sync{c.status.phase=="off" && c.status.lastRisk=="Periodic egress mismatch"})
+    }
     @Test func realControllerRejectsMismatchingReportWithoutRetry() throws {
         let f=try LifecycleFixture(),c=try f.makeController()
         f.healthOverride={let now=f.clock.sample().uptime;return EgressMonitorTests().report("8.8.8.8","1.1.1.1",finished:now)}
@@ -814,10 +844,10 @@ struct PeriodicEgressControllerTests {
         #expect(c.queue.sync{c.status.phase} != "armed")
         #expect(f.calls.contains("terminate"))
     }
-    @Test func missingFreshProofStopsEvenWithoutCompletedProbeCallback() throws {
+    @Test func missingFreshProofAloneDoesNotRemovePFOrStopClaude() throws {
         let f=try LifecycleFixture(),c=try f.makeController()
         try c.queue.sync {c.heartbeat();try c.begin(f.settings,launch:false);f.clock.advance(45);c.heartbeat();c.tick()}
-        #expect(c.queue.sync{c.status.phase}=="off")
-        #expect(c.queue.sync{c.status.lastRisk.contains("Periodic egress proof expired")})
+        #expect(c.queue.sync{c.status.phase}=="armed")
+        #expect(c.queue.sync{c.status.lastRisk.isEmpty && f.reference && !f.rules.isEmpty})
     }
 }

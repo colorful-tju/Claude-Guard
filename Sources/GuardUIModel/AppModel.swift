@@ -8,7 +8,7 @@ import GuardCore
     @Published public var ipCheck:IPCheck?
     @Published public var testingIP=false
     @Published public var ipStale=false
-    @Published public var state=Status() {didSet{observeInterruption();updateActivityLease()}}
+    @Published public var state=Status() {didSet{observeInterruption();observeEgressWarning();updateActivityLease()}}
     @Published public var interruptionAlert:ProtectionInterruption?
     private var lastPresentedInterruption:String?
     private func observeInterruption() {
@@ -20,10 +20,22 @@ import GuardCore
         if let event=interruptionAlert {preferences?.set(event.id,forKey:"acknowledgedInterruption")}
         interruptionAlert=nil
     }
+    @Published public var egressWarningAlert:EgressWarning?
+    private var lastPresentedEgressWarning:String?
+    private func observeEgressWarning() {
+        guard state.phase=="armed",let event=state.egressWarning,interruptionAlert==nil else{egressWarningAlert=nil;return}
+        guard event.id != lastPresentedEgressWarning,event.id != preferences?.string(forKey:"acknowledgedEgressWarning") else{return}
+        lastPresentedEgressWarning=event.id;egressWarningAlert=event
+    }
+    public func acknowledgeVisibleAlert() {
+        if interruptionAlert != nil {acknowledgeInterruption();return}
+        if let event=egressWarningAlert {preferences?.set(event.id,forKey:"acknowledgedEgressWarning")}
+        egressWarningAlert=nil
+    }
     public var guidance:Guidance {
         if state.phase=="off",!busy,failure.isEmpty,needsIPv6Off {return Guidance.reason("IPv6 default route detected")}
         if state.phase=="armed",state.egressRechecking==true,failure.isEmpty {
-            return .init("网络复核","出口暂未重新确认，正在有限重试","PF 与本地安全检查继续运行；持续失败将自动关闭 Claude。")
+            return .init("网络复核","出口待核验，PF 防护继续运行","未关闭 Claude；每 5 分钟重测。当前出口尚未确认；检测到不同公网 IP 会立即停止。")
         }
         return Guidance.current(state,failure:failure,busy:busy,confirmation:confirmation,ip:ipCheck,stale:ipStale || ipCheck?.expected != settings.expectedEgress)
     }
@@ -59,6 +71,7 @@ import GuardCore
     public var readyToQuit:Bool {state.phase=="off" && state.ipv6Override=="未临时修改" && !busy}
     public var menuStatus:String {
         if busy{return "处理中"}
+        if state.phase=="armed",state.egressRechecking==true {return "出口待核验"}
         if state.verified && state.phase=="armed" {return "已防护"}
         switch state.phase {case "off":return "OFF";case "recoveryBlocked":return "恢复受阻";default:return "待核验"}
     }

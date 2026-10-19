@@ -133,7 +133,7 @@ public final class Controller: @unchecked Sendable {
     }
     public func begin(_ settings:Settings,launch:Bool) throws {
         guard journal==nil,status.phase=="off" else{throw fail("Stop or recover the previous session first")}
-        self.settings=settings;egressMonitor=nil;status.periodicEgress=nil;status.egressRechecking=false;blockedStatistics=nil;status.blockedPackets=nil;status.blockedPacketsAt=nil;status.blockedPacketsIssue=nil;launched=false;heartbeatWasDelayed=false;lastMonitorAt=nil;lastMonitorInterval=nil;status.heartbeatDiagnostic=nil;logHealthy=true;status.verified=false;status.phase="checking"
+        self.settings=settings;egressMonitor=nil;status.periodicEgress=nil;status.egressWarning=nil;status.egressRechecking=false;blockedStatistics=nil;status.blockedPackets=nil;status.blockedPacketsAt=nil;status.blockedPacketsIssue=nil;launched=false;heartbeatWasDelayed=false;lastMonitorAt=nil;lastMonitorInterval=nil;status.heartbeatDiagnostic=nil;logHealthy=true;status.verified=false;status.phase="checking"
         do {
             try effects.ipv6?.verifyStable()
             recoveryAttempts=0;lastRecoveryCheck=nil
@@ -263,7 +263,7 @@ public final class Controller: @unchecked Sendable {
         var stage="liveness",observed:LocalSnapshot?,observedRoutes:String?,acceptedRouteEquivalence=false
         do {
             try requireActive()
-            try requireFreshEgressProof()
+            try requireEgressMonitor()
             stage="runtimeCollection"
             let evidence=try inspector.runtime(settings:settings);observedRoutes=evidence.routeDetail
             if !evidence.processObservation.isEmpty {log("process identity recheck: \(evidence.processObservation)")}
@@ -293,7 +293,7 @@ public final class Controller: @unchecked Sendable {
                 catch {status.monitor="PF 防护运行；socket 诊断保存失败（不等于泄漏）"}
                 lastSocketObservation=seconds()
             }
-            try requireFreshEgressProof()
+            try requireEgressMonitor()
             if let monitor=egressMonitor,effects.clock.sample().uptime>=monitor.nextCheckAt && !healthPending {
                 healthPending=true;let id=policy.sessionID
                 let group=healthGroup;group.enter()
@@ -324,9 +324,10 @@ public final class Controller: @unchecked Sendable {
             recordMonitoringFailure(policy:policy,baseline:baseline,stage:stage,reason:String(describing:error),current:observed,routes:observedRoutes,acceptedRouteEquivalence:acceptedRouteEquivalence)
         }
     }
-    private func requireFreshEgressProof() throws {
-        guard let monitor=egressMonitor,!monitor.expired(at:effects.clock.sample().uptime) else {
-            throw fail("Periodic egress proof expired: age=\(Int(effects.clock.sample().uptime-(egressMonitor?.lastVerifiedAt ?? 0)))s pending=\(healthPending)")
+    private func requireEgressMonitor() throws {
+        let now=effects.clock.sample().uptime
+        guard let monitor=egressMonitor,now.isFinite,now>=monitor.lastVerifiedAt else {
+            throw fail("Periodic egress monitor or clock unavailable")
         }
     }
     private func acceptEgress(_ report:EgressReport,policy:GuardPolicy,baseline:LocalSnapshot) {
@@ -353,15 +354,20 @@ public final class Controller: @unchecked Sendable {
             let reason:String
             switch decision {case .verified:reason="verified";case .retry(let value):reason="retry: "+value;case .stop(let value):reason=value}
             var diagnostic=EgressDiagnostic(report:report,queueDelay:max(0,now-report.finishedAt),proofAge:age,failures:monitor.failures,decision:reason)
-            diagnostic.proofRemainingSeconds=max(0,EgressTiming.proofLifetime-(now-monitor.lastVerifiedAt))
+            // No absolute stop deadline for unavailable echo services in 0.5.15.
             if case .retry=decision {diagnostic.retryAfterSeconds=max(0,monitor.nextCheckAt-now)}
             status.periodicEgress=diagnostic
             let encoded=try JSONEncoder().encode(diagnostic)
             log("periodic-egress "+String(decoding:encoded,as:UTF8.self))
             try requireActive()
             switch decision {
-            case .verified:status.egressRechecking=false
-            case .retry:status.egressRechecking=true
+            case .verified:status.egressRechecking=false;status.egressWarning=nil
+            case .retry(let reason):
+                status.egressRechecking=true
+                if monitor.failures>=2,status.egressWarning==nil {
+                    status.egressWarning=EgressWarning(reason:reason)
+                    log("egress-warning: repeated unavailable/stale samples; Claude retained; PF unchanged; retry in 300s")
+                }
             case .stop(let reason):recordMonitoringFailure(policy:policy,baseline:baseline,stage:"periodicEgress",reason:reason,current:nil,routes:nil)
             }
         }catch {recordMonitoringFailure(policy:policy,baseline:baseline,stage:"periodicEgress",reason:String(describing:error),current:observed,routes:routes)}
@@ -467,6 +473,7 @@ public final class Controller: @unchecked Sendable {
         status.monitor="停止中：常规出口监控已停止；正在终止 Claude/Code 并核验恢复"
         status.udp="恢复处理中；防护以恢复核验为准"
         var recoveryStage="terminateClaude"
+        status.egressWarning=nil;status.egressRechecking=false
         status.phase="stopping";status.lastRisk=reason;status.verified=false;session=SafetySession(recovering:j.policy);log("stop: \(reason)")
         do {
             try effects.terminateClaude()

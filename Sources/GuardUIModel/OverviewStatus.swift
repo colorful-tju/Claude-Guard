@@ -15,7 +15,7 @@ extension AppModel {
         case .protected:return "防护已验证，持续监控中"
         case .waiting:
             if !communicationWarning.isEmpty {return "助手状态响应延迟，正在重试"}
-            if state.phase=="armed" && state.egressRechecking==true {return "出口正在复核，PF 防护保持运行"}
+            if state.phase=="armed" && state.egressRechecking==true {return "出口待核验，PF 防护保持运行"}
             if state.phase=="armed" {return "控制界面响应延迟，防护仍在运行"}
             return busy ? "正在验证，请稍候":"尚未启动防护，等待运行"
         case .blocked:return guidance.title

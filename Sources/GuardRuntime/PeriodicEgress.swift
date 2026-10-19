@@ -25,47 +25,42 @@ public struct EgressDiagnostic:Codable,Sendable {
 }
 
 enum EgressTiming {
-    static let proofLifetime:TimeInterval = 45
+    static let retryInterval:TimeInterval = 300
     static let requestTimeout:TimeInterval = 10
-    static let schedulingMargin:TimeInterval = 2
 }
 
 enum EgressDecision:Equatable {case verified,retry(String),stop(String)}
-/// Only lack of evidence gets a bounded retry, never contradictory evidence.
+/// Missing network results degrade egress assurance, not the independent PF boundary.
 struct EgressMonitor {
     private(set) var lastVerifiedAt:Double
     private(set) var failures=0
     private(set) var nextCheckAt:Double
     init(verifiedAt:Double){lastVerifiedAt=verifiedAt;nextCheckAt=verifiedAt+15}
-    func expired(at now:Double)->Bool {now<lastVerifiedAt || now-lastVerifiedAt>=EgressTiming.proofLifetime}
     mutating func consume(_ report:EgressReport,expected:String,now:Double)->EgressDecision {
         // Mismatching public IP takes precedence over age: never hide it with a retry.
         if report.samples.contains(where:{$0.ip.map{IPv4.isPublic($0) && $0 != expected} ?? false}) {
             return .stop("Periodic egress mismatch")
         }
-        if expired(at:now){return .stop("Periodic egress proof expired")}
+        guard now.isFinite,now>=lastVerifiedAt else{return .stop("Periodic egress invalid clock")}
         if report.cancelled{return .stop("Periodic egress cancelled")}
         let coherent=report.samples.count==2 && Set(report.samples.map(\.service))==Set(EgressService.allCases)
             && report.startedAt.isFinite && report.finishedAt.isFinite && now.isFinite
             && report.startedAt<=report.finishedAt && report.finishedAt<=now
             && report.samples.allSatisfy{$0.completedAt.isFinite && $0.elapsed.isFinite && $0.elapsed>=0 && $0.completedAt>=report.startedAt && $0.completedAt<=report.finishedAt}
+        guard coherent else{return .stop("Periodic egress invalid evidence")}
         let matches=report.samples.filter{$0.ip==expected && $0.error.isEmpty}
-        var reason="invalid-evidence"
-        if coherent {
-            if matches.isEmpty {reason="services-unavailable"}
-            else if !matches.contains(where:{now-$0.completedAt<=10}) {reason="result-stale"}
-            else {
-                lastVerifiedAt=matches.map(\.completedAt).max()!;failures=0;nextCheckAt=now+15
-                return .verified
-            }
+        let reason:String
+        if matches.isEmpty {reason="services-unavailable"}
+        else if !matches.contains(where:{now-$0.completedAt<=10}) {reason="result-stale"}
+        else {
+            lastVerifiedAt=matches.map(\.completedAt).max()!;failures=0;nextCheckAt=now+15
+            return .verified
         }
-        // Spread fast TLS failures; the absolute proof deadline is never extended.
-        failures+=1
-        let preferredDelay:TimeInterval=failures==1 ? 6:10
-        let remaining=EgressTiming.proofLifetime-(now-lastVerifiedAt)
-        let availableDelay=max(0,remaining-EgressTiming.requestTimeout-EgressTiming.schedulingMargin)
-        nextCheckAt=now+min(preferredDelay,availableDelay)
-        return failures>=3 ? .stop("Periodic egress retry limit: "+reason):.retry(reason)
+        // The user accepts an unverified egress during outages. Never refresh
+        // lastVerifiedAt from failures; PF and runtime checks remain independent.
+        failures=min(failures+1,1_000_000)
+        nextCheckAt=now+EgressTiming.retryInterval
+        return .retry(reason)
     }
 }
 

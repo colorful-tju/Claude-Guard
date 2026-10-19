@@ -22,6 +22,12 @@ public struct ProtectionInterruption:Codable,Sendable,Identifiable {
     public var exitConfirmed:Bool=false
     public init(reason:String,requestedClaudeStop:Bool){self.reason=reason;self.requestedClaudeStop=requestedClaudeStop}
 }
+public struct EgressWarning:Codable,Sendable,Identifiable {
+    public var id:String=UUID().uuidString
+    public var timestamp:String=ISO8601DateFormatter().string(from:Date())
+    public var reason:String
+    public init(reason:String){self.reason=reason}
+}
 public struct HeartbeatDiagnostic:Codable,Sendable {
     public var ageSeconds:Double?
     public var maxGapSeconds:Double
@@ -32,6 +38,7 @@ public struct HeartbeatDiagnostic:Codable,Sendable {
 public struct Status:Codable,Sendable {
     public var periodicEgress:EgressDiagnostic?
     public var egressRechecking:Bool?
+    public var egressWarning:EgressWarning?
     public var heartbeatDiagnostic:HeartbeatDiagnostic?
     public var blockedPackets:UInt64?
     public var blockedPacketsAt:String?

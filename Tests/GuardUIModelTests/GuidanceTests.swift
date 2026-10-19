@@ -34,6 +34,22 @@ struct GuidanceTests {
         model.state.interruption=event
         #expect(model.interruptionAlert?.exitConfirmed==true)
     }
+    @Test @MainActor func egressWarningIsDistinctDeduplicatedAndClearsOnRecovery() {
+        let model=AppModel(autoPoll:false,preferences:nil)
+        model.state.phase="armed";model.state.verified=true;model.state.egressRechecking=true
+        let event=EgressWarning(reason:"services-unavailable")
+        model.state.egressWarning=event
+        #expect(model.egressWarningAlert?.id==event.id && model.interruptionAlert==nil)
+        #expect(model.bannerTone == .waiting && model.menuStatus=="出口待核验")
+        #expect(model.guidance.action.contains("5 分钟"))
+        model.acknowledgeVisibleAlert();model.state.message="poll"
+        #expect(model.egressWarningAlert==nil)
+        model.state.egressWarning=nil;model.state.egressRechecking=false
+        model.state.egressWarning=EgressWarning(reason:"new outage")
+        #expect(model.egressWarningAlert != nil)
+        model.state.phase="off"
+        #expect(model.egressWarningAlert==nil)
+    }
     @Test func recoveryBlockedOutranksOldSuccessAndIPv6OffIsNotAnError() {
         var status=Status();status.phase="recoveryBlocked";status.verified=true
         #expect(Guidance.current(status,failure:"",busy:false,confirmation:true,ip:nil,stale:false).title.contains("恢复受阻"))

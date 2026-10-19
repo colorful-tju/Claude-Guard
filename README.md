@@ -4,7 +4,7 @@
 
 面向 macOS 的小型桌面工具，为通过 HTTP 代理使用 Claude Desktop 与本机 Claude Code 的用户提供临时出口限制、启动前验收与运行中监控。使用结束后，按顺序退出受保护进程并恢复本工具修改的网络状态。
 
-> **0.5.14 测试版 · macOS 14+ · 源码可见 / 非商业 / 禁止二次开发**
+> **0.5.15 测试版 · macOS 14+ · 源码可见 / 非商业 / 禁止二次开发**
 > 个人测试版安装修复，尚未完成 Apple 公证，不是 Anthropic 官方软件。作者：[colorful / @colorful-tju](https://github.com/colorful-tju)。许可见 [LICENSE](LICENSE)。
 
 ## 为什么需要它
@@ -47,7 +47,7 @@ Claude Guard 面向这样的使用场景：你已经准备好一个 **数字 IPv
 
 ### 1. 打开 DMG
 
-从 [Releases](https://github.com/colorful-tju/Claude-Guard/releases/tag/v0.5.14) 获取对应架构的 DMG：`Claude-Guard-0.5.14-macOS-AppleSilicon-arm64.dmg` 或 `Claude-Guard-0.5.14-macOS-Intel-x86_64.dmg`。分别提供 Apple Silicon 与 Intel 测试包，适用于 Mac、macOS 14 或以上；不需要 Xcode、源码或终端构建命令。macOS 26 使用系统 Liquid Glass，旧系统使用材质回退。
+从 [Releases](https://github.com/colorful-tju/Claude-Guard/releases/tag/v0.5.15) 获取对应架构的 DMG：`Claude-Guard-0.5.15-macOS-AppleSilicon-arm64.dmg` 或 `Claude-Guard-0.5.15-macOS-Intel-x86_64.dmg`。分别提供 Apple Silicon 与 Intel 测试包，适用于 Mac、macOS 14 或以上；不需要 Xcode、源码或终端构建命令。macOS 26 使用系统 Liquid Glass，旧系统使用材质回退。
 
 打开映像，按顶层说明先卸载旧版，再双击「双击安装 Claude Guard.app」；首次安装跳过卸载，**无需拖入应用程序文件夹**。根据图形提示完成管理员授权，成功后选择打开 App。更新前请先在旧版菜单栏选择「恢复并退出」。不要直接删除旧助手或恢复记录。
 
@@ -94,7 +94,7 @@ PF 规则使用独立子 anchor，保留 Apple 主规则，通过自身 enable t
 
 ### 运行中的处理
 
-本地前提约每秒检查，出口约每 15 秒复核。进程有 UDP socket 不直接等同于泄漏；PF 承担先行阻断，进程观测只提供有限诊断。无法维持关键前提时，请求结束受保护的 Claude/Code，并解释原因。未知来源的 PF 阻断不会伪称来自 Claude。
+本地前提约每秒检查。出口正常时约每 15 秒复核；运行中获取不到有效出口时，保持 PF，改为每 5 分钟重测，第二次仍失败弹窗提醒，不因此关闭 Claude。任一服务返回非预期公网 IP 仍立即关闭 Claude；首次启动必须成功核验。进程有 UDP socket 不直接等同于泄漏；PF 承担先行阻断，进程观测只提供有限诊断。无法维持关键前提时，请求结束受保护的 Claude/Code，并解释原因。未知来源的 PF 阻断不会伪称来自 Claude。
 
 Claude Code 的已识别子进程纳入生命周期管理，但不承诺覆盖远程执行器、虚拟机或绕过系统保护的特权进程。
 
@@ -188,6 +188,8 @@ DMG 顶层提供「移除 Claude Guard」、安装器以及「先卸载旧版，
 
 详见 [0.5.5 验证步骤与限制](docs/RELEASE-0.5.5.md)。本版仍是测试版，高负载真实会话和 Intel 真机需用户验收。
 
+> 以下为历史版本记录；0.5.15 已替代其中的出口缺失停止策略。
+
 ## 0.5.6：出口复核与故障证据
 
 检测服务短暂失败时显示黄色复核提示，PF 与本地防护核验继续运行。最多连续 3 轮失败、两轮间隔至少 2 秒，距最后有效出口样本最长 45 秒；超限结束 Claude。任一服务返回非预期公网 IP 仍立即停止，不进入重试。仅接受完成后 10 秒内的样本，不因回调排队超过 3 秒就直接停机。
@@ -227,3 +229,7 @@ DMG 顶层提供「移除 Claude Guard」、安装器以及「先卸载旧版，
 ## 0.5.14 更新：出口重试等待适配剩余期限
 
 为最后一次出口核验预留请求与调度时间，剩余期限不足时缩短原有 6/10 秒退避。45 秒硬期限、最多三次失败和错误出口立即停止保持不变。详见 [验证与恢复说明](docs/RELEASE-0.5.14.md)。
+
+## 0.5.15 更新：出口缺失仅提醒
+
+运行中超时、TLS 错误或检测服务不可用不再触发 45 秒/三次失败停止。5 分钟后重测，仍失败则弹窗提醒，同一故障只弹一次，之后每 5 分钟继续检测；恢复正常后清除提醒并恢复约 15 秒频率。黄色提示明确当前出口尚未核验，PF 与所有本地安全检查仍运行。错误公网 IP 立即关闭 Claude；首次启动验证不变。此策略接受检测不可用期间的出口不确定性，并不证明出口未变化。详见 [验证与恢复说明](docs/RELEASE-0.5.15.md)。

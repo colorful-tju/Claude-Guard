@@ -71,6 +71,7 @@ private struct MenuStatus:View {
     var body:some View {
         Label("Claude · \(model.menuStatus)",systemImage:model.state.verified ? "checkmark.shield.fill":"shield.lefthalf.filled")
             .onChange(of:model.interruptionAlert?.id){_,id in if id != nil {openWindow(id:"main");NSApp.activate(ignoringOtherApps:true)}}
+            .onChange(of:model.egressWarningAlert?.id){_,id in if id != nil {openWindow(id:"main");NSApp.activate(ignoringOtherApps:true)}}
     }
 }
 private struct GuardMenu:View {
@@ -171,12 +172,15 @@ private struct LauncherView:View {
         .sheet(isPresented:$showWelcome){WelcomeView(model:model){showWelcome=false;page = .network}}
         .onChange(of:model.state.phase){_,_ in model.ipStale=true}
         .onChange(of:model.interruptionAlert?.id){_,id in if id != nil && !preview {showWelcome=false;NSApp.activate(ignoringOtherApps:true)}}
-        .alert("启动器自动停止提醒",isPresented:Binding(get:{model.interruptionAlert != nil},set:{if !$0 {model.acknowledgeInterruption()}})) {
-            Button("查看诊断"){page = .diagnostics;model.acknowledgeInterruption()}
-            Button("知道了",role:.cancel){model.acknowledgeInterruption()}
+        .onChange(of:model.egressWarningAlert?.id){_,id in if id != nil && !preview {showWelcome=false;NSApp.activate(ignoringOtherApps:true)}}
+        .alert(model.interruptionAlert != nil ? "启动器自动停止提醒":"出口暂时无法核验",isPresented:Binding(get:{model.interruptionAlert != nil || model.egressWarningAlert != nil},set:{if !$0 {model.acknowledgeVisibleAlert()}})) {
+            Button("查看诊断"){page = .diagnostics;model.acknowledgeVisibleAlert()}
+            Button("知道了",role:.cancel){model.acknowledgeVisibleAlert()}
         } message: {
             if let event=model.interruptionAlert {
                 Text("\(event.exitConfirmed ? "启动器已主动关闭 Claude。":event.requestedClaudeStop ? "启动器已请求关闭 Claude，但尚未确认全部退出。":"启动器已结束防护验证。")\n\(Guidance.reason(event.reason).title)\n\(Guidance.reason(event.reason).action)\n时间：\(event.timestamp)\n原始原因：\(String(event.reason.prefix(400)))")
+            } else if let event=model.egressWarningAlert {
+                Text("两次出口检测均未取得可用结果。Claude 未关闭，PF 与本地防护检查继续运行。当前公网出口尚未确认，不代表检测到 IP 泄漏。\n请检查代理连通性；程序每 5 分钟重测，恢复后自动清除提醒。检测到不同公网 IP 仍会立即关闭 Claude。\n时间：\(event.timestamp)")
             }
         }
     }

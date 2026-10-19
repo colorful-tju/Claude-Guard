@@ -27,55 +27,31 @@ struct EgressMonitorTests {
             #expect(monitor.consume(report("8.8.8.8",b),expected:"1.1.1.1",now:124) == .stop("Periodic egress mismatch"))
         }
     }
-    @Test func retryBudgetAndAbsoluteProofDeadlineCannotBeExtended() {
+    @Test func missingResultsRetryEveryFiveMinutesWithoutRefreshingProof() {
         var monitor=EgressMonitor(verifiedAt:100)
-        #expect(monitor.consume(report(nil,nil,finished:116),expected:"1.1.1.1",now:116) == .retry("services-unavailable"))
-        #expect(monitor.consume(report(nil,nil,finished:128),expected:"1.1.1.1",now:128) == .retry("services-unavailable"))
-        #expect(monitor.consume(report(nil,nil,finished:140),expected:"1.1.1.1",now:140) == .stop("Periodic egress retry limit: services-unavailable"))
-        var deadline=EgressMonitor(verifiedAt:100)
-        #expect(deadline.expired(at:145))
-        #expect(deadline.consume(report("1.1.1.1","1.1.1.1",finished:144),expected:"1.1.1.1",now:145) == .stop("Periodic egress proof expired"))
+        for now:Double in [120,420,720,1020] {
+            #expect(monitor.consume(report(nil,nil,finished:now),expected:"1.1.1.1",now:now) == .retry("services-unavailable"))
+            #expect(monitor.nextCheckAt==now+300)
+            #expect(monitor.lastVerifiedAt==100)
+        }
+        #expect(monitor.failures==4)
     }
-    @Test func fastFailuresUseSpacedRetriesAndStillStopOnThirdFailure() {
+    @Test func successfulRecoveryResetsCadenceAndMismatchStillStops() {
         var monitor=EgressMonitor(verifiedAt:100)
-        #expect(monitor.consume(report(nil,nil,finished:117),expected:"1.1.1.1",now:117) == .retry("services-unavailable"))
-        #expect(monitor.nextCheckAt==123)
-        #expect(monitor.consume(report(nil,nil,finished:124),expected:"1.1.1.1",now:124) == .retry("services-unavailable"))
-        #expect(monitor.nextCheckAt==133)
-        #expect(monitor.lastVerifiedAt==100 && !monitor.expired(at:134))
-        #expect(monitor.consume(report(nil,nil,finished:135),expected:"1.1.1.1",now:135) == .stop("Periodic egress retry limit: services-unavailable"))
-        #expect(monitor.expired(at:145))
+        _=monitor.consume(report(nil,nil,finished:120),expected:"1.1.1.1",now:120)
+        #expect(monitor.consume(report("1.1.1.1",nil,finished:421),expected:"1.1.1.1",now:422) == .verified)
+        #expect(monitor.failures==0 && monitor.lastVerifiedAt==421 && monitor.nextCheckAt==437)
+        #expect(monitor.consume(report("8.8.8.8","1.1.1.1",finished:438),expected:"1.1.1.1",now:438) == .stop("Periodic egress mismatch"))
     }
-    @Test func recoveryAfterBackoffResetsBudgetAndMismatchStillStopsDuringRecovery() {
+    @Test func mismatchAfterLongOutageIsNotHiddenAsUnavailable() {
         var monitor=EgressMonitor(verifiedAt:100)
-        _=monitor.consume(report(nil,nil,finished:117),expected:"1.1.1.1",now:117)
-        _=monitor.consume(report(nil,nil,finished:124),expected:"1.1.1.1",now:124)
-        #expect(monitor.consume(report("1.1.1.1",nil,finished:135),expected:"1.1.1.1",now:135) == .verified)
-        #expect(monitor.failures==0 && monitor.lastVerifiedAt==135 && monitor.nextCheckAt==150)
-        #expect(monitor.consume(report("8.8.8.8","1.1.1.1",finished:151),expected:"1.1.1.1",now:151) == .stop("Periodic egress mismatch"))
+        _=monitor.consume(report(nil,nil,finished:120),expected:"1.1.1.1",now:120)
+        #expect(monitor.consume(report(nil,"8.8.8.8",finished:1000),expected:"1.1.1.1",now:1000) == .stop("Periodic egress mismatch"))
     }
-    @Test func delayedRetryDoesNotExtendAbsoluteDeadline() {
+    @Test func staleResultNeverPretendsEgressIsFresh() {
         var monitor=EgressMonitor(verifiedAt:100)
-        _=monitor.consume(report(nil,nil,finished:130),expected:"1.1.1.1",now:130)
-        _=monitor.consume(report(nil,nil,finished:140),expected:"1.1.1.1",now:140)
-        #expect(monitor.nextCheckAt==140 && monitor.expired(at:145))
-        #expect(monitor.consume(report("1.1.1.1","1.1.1.1",finished:150),expected:"1.1.1.1",now:150) == .stop("Periodic egress proof expired"))
-    }
-    @Test func incidentRetryReservesRequestAndSchedulingBudget() {
-        var monitor=EgressMonitor(verifiedAt:100)
-        _=monitor.consume(report(nil,nil,finished:120.21),expected:"1.1.1.1",now:120.21)
-        #expect(monitor.nextCheckAt==126.21)
-        _=monitor.consume(report(nil,nil,finished:130.916),expected:"1.1.1.1",now:130.916)
-        #expect(monitor.nextCheckAt==133)
-        #expect(monitor.nextCheckAt+10+2==145)
-        #expect(monitor.lastVerifiedAt==100 && monitor.failures==2)
-        #expect(monitor.consume(report("1.1.1.1",nil,finished:143),expected:"1.1.1.1",now:144) == .verified)
-    }
-    @Test func lateFirstFailureRetriesImmediatelyWithoutExtendingProof() {
-        var monitor=EgressMonitor(verifiedAt:100)
-        _=monitor.consume(report(nil,nil,finished:139),expected:"1.1.1.1",now:140)
-        #expect(monitor.nextCheckAt==140)
-        #expect(monitor.lastVerifiedAt==100 && monitor.expired(at:145))
+        #expect(monitor.consume(report("1.1.1.1",nil,finished:200),expected:"1.1.1.1",now:220) == .retry("result-stale"))
+        #expect(monitor.lastVerifiedAt==100 && monitor.nextCheckAt==520)
     }
     @Test func tlsDiagnosticKeepsKnownSignalsButNeverRawSecrets() {
         let raw="curl: (35) LibreSSL SSL_connect: SSL_ERROR_SYSCALL connection reset by peer https://user:secret@private.example/token?key=SECRET\nPRIVATE RESPONSE"
