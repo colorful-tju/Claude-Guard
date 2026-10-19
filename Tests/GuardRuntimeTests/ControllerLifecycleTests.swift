@@ -325,7 +325,7 @@ struct MonitoringHealthDiagnosticTests {
             if round<3 {
                 #expect(c.queue.sync{c.status.phase}=="armed")
                 #expect(c.queue.sync{c.status.egressRechecking}==true)
-                c.queue.sync {f.clock.advance(2);c.heartbeat();c.tick()}
+                c.queue.sync {f.clock.advance(round==1 ? 6:10);c.heartbeat();c.tick()}
             }
         }
         #expect(c.queue.sync{c.status.phase}=="off")

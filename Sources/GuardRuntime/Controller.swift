@@ -299,7 +299,9 @@ public final class Controller: @unchecked Sendable {
             egressMonitor=monitor
             let reason:String
             switch decision {case .verified:reason="verified";case .retry(let value):reason="retry: "+value;case .stop(let value):reason=value}
-            let diagnostic=EgressDiagnostic(report:report,queueDelay:max(0,now-report.finishedAt),proofAge:age,failures:monitor.failures,decision:reason)
+            var diagnostic=EgressDiagnostic(report:report,queueDelay:max(0,now-report.finishedAt),proofAge:age,failures:monitor.failures,decision:reason)
+            diagnostic.proofRemainingSeconds=max(0,45-(now-monitor.lastVerifiedAt))
+            if case .retry=decision {diagnostic.retryAfterSeconds=max(0,monitor.nextCheckAt-now)}
             status.periodicEgress=diagnostic
             let encoded=try JSONEncoder().encode(diagnostic)
             log("periodic-egress "+String(decoding:encoded,as:UTF8.self))

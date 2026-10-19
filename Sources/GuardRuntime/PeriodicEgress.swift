@@ -20,6 +20,8 @@ public struct EgressDiagnostic:Codable,Sendable {
     public var proofAge:Double
     public var failures:Int
     public var decision:String
+    public var retryAfterSeconds:Double? = nil
+    public var proofRemainingSeconds:Double? = nil
 }
 
 enum EgressDecision:Equatable {case verified,retry(String),stop(String)}
@@ -51,7 +53,8 @@ struct EgressMonitor {
                 return .verified
             }
         }
-        failures+=1;nextCheckAt=now+2
+        // Spread fast TLS failures; the absolute proof deadline is never extended.
+        failures+=1;nextCheckAt=now+(failures==1 ? 6:10)
         return failures>=3 ? .stop("Periodic egress retry limit: "+reason):.retry(reason)
     }
 }

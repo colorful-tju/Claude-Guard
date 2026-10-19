@@ -22,13 +22,36 @@ public enum ProbeExecutor {
         ProbeWorker.diagnostic("native-finish kind=\(kind.rawValue) stage=\(diagnostics.stage) errno=\(diagnostics.error) elapsed_ms=\(diagnostics.elapsed_ms) result=\(r) sent=\(sent)")
         return .init(attempted:sent==1,reply:r==1,setupError:r<0,kind:kind)
     }
+    /// Emit fixed diagnostic tags only; raw stderr may contain addresses or credentials.
+    static func echoFailure(service:EgressService,status:Int32,stderr:String)->String {
+        let text=String(stderr.prefix(4096)).lowercased()
+        let known:[(String,String)] = [
+            ("ssl_error_syscall","ssl-error-syscall"),
+            ("connection reset","connection-reset"),
+            ("unexpected eof","unexpected-eof"),
+            ("ssl_error_zero_return","tls-closed"),
+            ("certificate verify failed","certificate-verification-failed"),
+            ("ssl certificate problem","certificate-verification-failed"),
+            ("alert handshake failure","tls-handshake-alert"),
+            ("alert protocol version","tls-version-alert"),
+            ("tlsv1 alert","tls-alert"),
+            ("sslv3 alert","tls-alert"),
+            ("wrong version number","tls-version-mismatch"),
+            ("failed to connect","connect-failed"),
+            ("could not resolve host","dns-resolution-failed"),
+            ("timed out","timeout")
+        ]
+        let tags=known.filter{text.contains($0.0)}.map{$0.1}
+        let detail=Array(Set(tags)).sorted().joined(separator:",")
+        return "HTTPS echo \(service.rawValue) curl exit=\(status) detail="+(detail.isEmpty ? "unclassified":detail)
+    }
     public static func egress(service:EgressService,commands:Commands,cancelled:@escaping @Sendable ()->Bool={false}) throws -> String {
         let url=service == .ipify ? "https://api.ipify.org" : "https://ipv4.webshare.io/"
         // -q first suppresses ~/.curlrc. Empty proxy + noproxy suppresses all ambient proxy settings.
         let result=try commands.run("/usr/bin/curl",["-q","--proxy","","--noproxy","*","--ipv4","--proto","=https","--connect-timeout","5","--max-time","8","--fail","--silent","--show-error",url],timeout:10,cancelled:cancelled)
         guard result.status==0 else {
             // curl exit status distinguishes DNS, TCP, TLS, HTTP and timeout failures.
-            throw fail("HTTPS echo \(service.rawValue) curl exit=\(result.status)")
+            throw fail(echoFailure(service:service,status:result.status,stderr:result.error))
         }
         let ip=result.output.trimmingCharacters(in:.whitespacesAndNewlines)
         guard IPv4.isPublic(ip) else{throw fail("Invalid HTTPS echo response")};return ip

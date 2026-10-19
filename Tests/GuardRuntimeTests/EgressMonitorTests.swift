@@ -36,6 +36,38 @@ struct EgressMonitorTests {
         #expect(deadline.expired(at:145))
         #expect(deadline.consume(report("1.1.1.1","1.1.1.1",finished:144),expected:"1.1.1.1",now:145) == .stop("Periodic egress proof expired"))
     }
+    @Test func fastFailuresUseSpacedRetriesAndStillStopOnThirdFailure() {
+        var monitor=EgressMonitor(verifiedAt:100)
+        #expect(monitor.consume(report(nil,nil,finished:117),expected:"1.1.1.1",now:117) == .retry("services-unavailable"))
+        #expect(monitor.nextCheckAt==123)
+        #expect(monitor.consume(report(nil,nil,finished:124),expected:"1.1.1.1",now:124) == .retry("services-unavailable"))
+        #expect(monitor.nextCheckAt==134)
+        #expect(monitor.lastVerifiedAt==100 && !monitor.expired(at:134))
+        #expect(monitor.consume(report(nil,nil,finished:135),expected:"1.1.1.1",now:135) == .stop("Periodic egress retry limit: services-unavailable"))
+        #expect(monitor.expired(at:145))
+    }
+    @Test func recoveryAfterBackoffResetsBudgetAndMismatchStillStopsDuringRecovery() {
+        var monitor=EgressMonitor(verifiedAt:100)
+        _=monitor.consume(report(nil,nil,finished:117),expected:"1.1.1.1",now:117)
+        _=monitor.consume(report(nil,nil,finished:124),expected:"1.1.1.1",now:124)
+        #expect(monitor.consume(report("1.1.1.1",nil,finished:135),expected:"1.1.1.1",now:135) == .verified)
+        #expect(monitor.failures==0 && monitor.lastVerifiedAt==135 && monitor.nextCheckAt==150)
+        #expect(monitor.consume(report("8.8.8.8","1.1.1.1",finished:151),expected:"1.1.1.1",now:151) == .stop("Periodic egress mismatch"))
+    }
+    @Test func delayedRetryDoesNotExtendAbsoluteDeadline() {
+        var monitor=EgressMonitor(verifiedAt:100)
+        _=monitor.consume(report(nil,nil,finished:130),expected:"1.1.1.1",now:130)
+        _=monitor.consume(report(nil,nil,finished:140),expected:"1.1.1.1",now:140)
+        #expect(monitor.nextCheckAt==150 && monitor.expired(at:145))
+        #expect(monitor.consume(report("1.1.1.1","1.1.1.1",finished:150),expected:"1.1.1.1",now:150) == .stop("Periodic egress proof expired"))
+    }
+    @Test func tlsDiagnosticKeepsKnownSignalsButNeverRawSecrets() {
+        let raw="curl: (35) LibreSSL SSL_connect: SSL_ERROR_SYSCALL connection reset by peer https://user:secret@private.example/token?key=SECRET\nPRIVATE RESPONSE"
+        let result=ProbeExecutor.echoFailure(service:.ipify,status:35,stderr:raw)
+        #expect(result=="HTTPS echo ipify curl exit=35 detail=connection-reset,ssl-error-syscall")
+        #expect(ProbeExecutor.echoFailure(service:.webshare,status:35,stderr:"unknown secret body")=="HTTPS echo webshare curl exit=35 detail=unclassified")
+        #expect(ProbeExecutor.echoFailure(service:.ipify,status:35,stderr:"unexpected EOF while reading").contains("unexpected-eof"))
+    }
     @Test func incompleteDuplicateCancelledOrFutureEvidenceNeverVerifies() {
         let good=report("1.1.1.1","1.1.1.1")
         var duplicate=good;duplicate.samples[1].service = .ipify
