@@ -127,7 +127,7 @@ raise SystemExit('unexpected fixture command '+tool)
                 path.write_text('new-'+path.name)
                 path.chmod(0o755)
             shutil.copy2(tools/'helper',staged/'Contents/Resources/guard-daemon')
-            for version in ['0.2.7','0.2.8','0.2.9','0.3.0','0.3.1','0.3.2','0.4.0','0.4.1','0.4.2','0.4.3','0.4.4','0.4.5','0.4.6','0.5.4','0.5.5','0.5.6','0.5.7','0.5.8','0.5.9','0.5.10','0.5.11','0.5.12']:
+            for version in ['0.2.7','0.2.8','0.2.9','0.3.0','0.3.1','0.3.2','0.4.0','0.4.1','0.4.2','0.4.3','0.4.4','0.4.5','0.4.6','0.5.4','0.5.5','0.5.6','0.5.7','0.5.8','0.5.9','0.5.10','0.5.11','0.5.12','0.5.13']:
                 with zipfile.ZipFile(project/f'dist/ClaudeSafeLauncher-{version}-test.zip','w') as archive:
                     for path in staged.rglob('*'):
                         archive.write(path,path.relative_to(staged.parent))

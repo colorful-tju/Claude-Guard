@@ -49,7 +49,9 @@ public final class Inspector: @unchecked Sendable {
         let connection=try GatewayRoute.select(route:physicalRoute,physical:network.physical,owner:identity,
                                                gateway:settings.gateway,port:settings.port,connections:connections)
         let end=try NativeProcesses.record(core.pid)
-        guard end.started==core.started,end.path==core.path,try events.epoch()==before else{throw fail("Runtime changed while collecting evidence")}
+        guard end.started==core.started,end.path==core.path else{throw fail("Runtime changed while collecting evidence: core identity")}
+        let after=try events.epoch()
+        guard after==before else{throw fail("Runtime changed while collecting evidence: epoch \(before)->\(after), interfaceGeneration=\(network.physical.generation)->\(try events.interfaceGeneration())")}
         let detail=network.detail+"\nordinary-gateway-route\n"+(try RouteEvidence.canonical(ordinaryRoute))+"\nphysical-scoped-gateway-route\n"+(try RouteEvidence.canonical(physicalRoute))
         return .init(node:node,core:identity,connection:connection,network:network,processObservation:inventory.rechecked>0 ? "rechecked=\(inventory.rechecked) recovered=\(inventory.recovered)":"",routeFingerprint:hash(Data(detail.utf8)),routeDetail:detail,epoch:before,claude:trackedClaude)
     }

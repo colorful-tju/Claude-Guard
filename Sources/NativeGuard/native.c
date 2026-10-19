@@ -243,6 +243,45 @@ int csg_probe_detailed(int family,int tcp,uint32_t index,const char *source,cons
 }
 int csg_probe(int family,int tcp,uint32_t index,const char *source,const char *target,uint16_t sport,uint16_t dport,int timeout,int stun,int *sent){return csg_probe_detailed(family,tcp,index,source,target,sport,dport,timeout,stun,sent,NULL);}
 int csg_route_open(void){int fd=socket(PF_ROUTE,SOCK_RAW,0);if(fd>=0&&fcntl(fd,F_SETFL,O_NONBLOCK)<0){int error=errno;close(fd);errno=error;return -1;}return fd;}
+/* Some Darwin RTM_ADD messages have rtm_index=0 while the scoped IPv6
+ * destination and AF_LINK gateway identify the interface. Only infer for a
+ * fully parsed link-local route with mutually consistent scope/index evidence.
+ * Unknown, global, default, redirected or malformed messages stay unknown.
+ * This only attributes a notification; it never grants interface access. */
+static uint32_t scoped_route_index(const unsigned char *payload,size_t size,int addrs,int flags) {
+    if(addrs<0 || ((unsigned)addrs>>RTAX_MAX)!=0)return 0;
+    const unsigned char *addresses[RTAX_MAX]={0};size_t lengths[RTAX_MAX]={0};size_t offset=0;
+    for(int slot=0;slot<RTAX_MAX;slot++)if(addrs&(1<<slot)) {
+        if(size-offset<2)return 0;
+        size_t length=payload[offset];size_t step=length ? (length+3)&~(size_t)3 : 4;
+        if(step>size-offset || (length>0 && length<2))return 0;
+        addresses[slot]=payload+offset;lengths[slot]=length;offset+=step;
+    }
+    for(int slot=RTAX_NETMASK;slot<=RTAX_GENMASK;slot++)if(addresses[slot]) {
+        if(lengths[slot]<10 || addresses[slot][8]!=0xff || (addresses[slot][9]&0xc0)!=0xc0)return 0;
+    }
+    if(!addresses[RTAX_NETMASK] && !(flags&RTF_HOST))return 0;
+    if(offset!=size || lengths[RTAX_DST]!=sizeof(struct sockaddr_in6) || lengths[RTAX_GATEWAY]<8)return 0;
+    const unsigned char *dst=addresses[RTAX_DST],*gateway=addresses[RTAX_GATEWAY];
+    if(dst[1]!=AF_INET6 || dst[8]!=0xfe || (dst[9]&0xc0)!=0x80 || gateway[1]!=AF_LINK)return 0;
+    uint16_t index;memcpy(&index,gateway+2,sizeof(index));if(!index)return 0;
+    uint16_t embedded=(uint16_t)((dst[10]<<8)|dst[11]);uint32_t scope;memcpy(&scope,dst+24,sizeof(scope));
+    if((!embedded&&!scope) || (embedded&&embedded!=index) || (scope&&scope!=index))return 0;
+    for(int slot=0;slot<RTAX_MAX;slot++) {
+        if(slot==RTAX_NETMASK || slot==RTAX_GENMASK || !addresses[slot])continue;
+        const unsigned char *a=addresses[slot];size_t length=lengths[slot];
+        if(length<2)return 0;
+        if(a[1]==AF_LINK) {
+            uint16_t link;if(length<8)return 0;memcpy(&link,a+2,sizeof(link));
+            if(link!=index || (size_t)8+a[5]+a[6]+a[7]>length)return 0;
+        } else if(a[1]==AF_INET6) {
+            if(length!=sizeof(struct sockaddr_in6) || a[8]!=0xfe || (a[9]&0xc0)!=0x80)return 0;
+            uint16_t embeddedScope=(uint16_t)((a[10]<<8)|a[11]);uint32_t explicitScope;memcpy(&explicitScope,a+24,sizeof(explicitScope));
+            if((embeddedScope&&embeddedScope!=index)||(explicitScope&&explicitScope!=index))return 0;
+        } else return 0;
+    }
+    return index;
+}
 /* IFINFO counters are not interface lifetimes. Preserve ALL non-statistical
  * if_data fields (including last administrative change), flags and index.
  * Only this exact, seeded signature is eligible for duplicate suppression. */
@@ -268,10 +307,12 @@ int csg_route_decode(const void *data,size_t n,CSGRouteEvent *event){
         if(r.rtm_errno<0)return -1;
         /* Retain bounded route metadata for diagnosis, including unsuccessful
          * requests. Never infer a changed interface from a route message. */
-        int used=snprintf(event->signature,sizeof(event->signature),"errno=%d flags=%x pid=%d seq=%d addrs=%x payload=",r.rtm_errno,r.rtm_flags,r.rtm_pid,r.rtm_seq,r.rtm_addrs);
+        int used=snprintf(event->signature,sizeof(event->signature),"errno=%d flags=%x pid=%d seq=%d headerIndex=%u addrs=%x payload=",r.rtm_errno,r.rtm_flags,r.rtm_pid,r.rtm_seq,r.rtm_index,r.rtm_addrs);
         for(size_t i=sizeof(r);i<n && used+3<(int)sizeof(event->signature);i++)
             used+=snprintf(event->signature+used,sizeof(event->signature)-(size_t)used,"%02x",b[i]);
         if(r.rtm_errno != 0)return 1;
+        if(!event->index && event->type!=RTM_REDIRECT)
+            event->index=scoped_route_index(b+sizeof(r),n-sizeof(r),r.rtm_addrs,r.rtm_flags);
 
         if(event->type!=RTM_REDIRECT&&(r.rtm_flags&(RTF_LLINFO|RTF_WASCLONED)))return 2;
         return 1;

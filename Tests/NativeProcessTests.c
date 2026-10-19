@@ -10,8 +10,45 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Replay the route payload that stopped 0.5.12 at 06:03:50Z. No route socket writes. */
+static void scoped_route_tests(void) {
+    const char *hex="1c1e000000000000fe80000d0000000010609dfffe40f9ef0d00000014120d000600060012609d40f9ef000000000000";
+    unsigned char bytes[512]={0};struct rt_msghdr r={0};
+    r.rtm_msglen=sizeof(r)+strlen(hex)/2;r.rtm_version=RTM_VERSION;r.rtm_type=RTM_ADD;r.rtm_flags=0x844;r.rtm_addrs=3;
+    memcpy(bytes,&r,sizeof(r));
+    for(size_t i=0;i<strlen(hex)/2;i++){unsigned value;assert(sscanf(hex+2*i,"%2x",&value)==1);bytes[sizeof(r)+i]=(unsigned char)value;}
+    CSGRouteEvent e;
+    assert(csg_route_decode(bytes,r.rtm_msglen,&e)==1 && e.index==13);
+    /* Address rotation carries DST/GATEWAY/NETMASK/IFP/IFA, not just a host. */
+    const char *prefix="1c1e000000000000fe80000d0000000000000000000000000000000014120d00060000000000000000000000000000001cffffffffffffffffffffffffffffff00000000000000000000000014120d00060506006177646c301a8b74ade506001c1e000000000000fe80000d00000000188b74fffeade50600000000";
+    unsigned char network[512]={0};struct rt_msghdr nr=r;nr.rtm_addrs=0x37;nr.rtm_flags=0x1000141;nr.rtm_msglen=sizeof(nr)+strlen(prefix)/2;
+    memcpy(network,&nr,sizeof(nr));for(size_t i=0;i<strlen(prefix)/2;i++){unsigned value;assert(sscanf(prefix+2*i,"%2x",&value)==1);network[sizeof(nr)+i]=(unsigned char)value;}
+    assert(csg_route_decode(network,nr.rtm_msglen,&e)==1 && e.index==13);
+    network[sizeof(nr)+48+8]=0;assert(csg_route_decode(network,nr.rtm_msglen,&e)==1 && e.index==0);network[sizeof(nr)+48+8]=0xff;
+    network[sizeof(nr)+76+2]=14;assert(csg_route_decode(network,nr.rtm_msglen,&e)==1 && e.index==0);
+    r.rtm_flags=0;memcpy(bytes,&r,sizeof(r));assert(csg_route_decode(bytes,r.rtm_msglen,&e)==1 && e.index==0);r.rtm_flags=0x844;memcpy(bytes,&r,sizeof(r));
+    /* The same form on llw0 index 14 is attributed, never blanket utun*. */
+    bytes[sizeof(r)+11]=14;bytes[sizeof(r)+24]=14;bytes[sizeof(r)+30]=14;
+    assert(csg_route_decode(bytes,r.rtm_msglen,&e)==1 && e.index==14);
+    bytes[sizeof(r)+11]=13;bytes[sizeof(r)+24]=13;bytes[sizeof(r)+30]=13;
+    for(size_t cut=sizeof(r);cut<sizeof(r)+strlen(hex)/2;cut++) {
+        struct rt_msghdr shortHeader=r;shortHeader.rtm_msglen=cut;memcpy(bytes,&shortHeader,sizeof(shortHeader));
+        assert(csg_route_decode(bytes,cut,&e)==1 && e.index==0);
+    }
+    memcpy(bytes,&r,sizeof(r));
+    /* A global destination, mismatched scope, redirect or malformed payload must
+     * never acquire an auxiliary interface attribution. */
+    bytes[sizeof(r)+8]=0x20;assert(csg_route_decode(bytes,r.rtm_msglen,&e)==1 && e.index==0);bytes[sizeof(r)+8]=0xfe;
+    bytes[sizeof(r)+30]=14;assert(csg_route_decode(bytes,r.rtm_msglen,&e)==1 && e.index==0);bytes[sizeof(r)+30]=13;
+    bytes[sizeof(r)+24]=14;assert(csg_route_decode(bytes,r.rtm_msglen,&e)==1 && e.index==0);bytes[sizeof(r)+24]=13;
+    r.rtm_type=RTM_REDIRECT;memcpy(bytes,&r,sizeof(r));assert(csg_route_decode(bytes,r.rtm_msglen,&e)==1 && e.index==0);
+    r.rtm_type=RTM_ADD;r.rtm_msglen--;memcpy(bytes,&r,sizeof(r));assert(csg_route_decode(bytes,r.rtm_msglen,&e)==1 && e.index==0);
+    r.rtm_msglen++;memcpy(bytes,&r,sizeof(r));bytes[sizeof(r)+28]=255;assert(csg_route_decode(bytes,r.rtm_msglen,&e)==1 && e.index==0);
+}
+
 /* Creates and reaps ONLY its own child. No network, PF, or existing-process signals. */
 int main(void) {
+    scoped_route_tests();
     uint32_t index=0;
     struct ifa_msghdr address={0};address.ifam_msglen=sizeof(address);address.ifam_version=RTM_VERSION;address.ifam_type=RTM_NEWADDR;address.ifam_index=13;
     assert(csg_route_message(&address,sizeof(address),&index)==1 && index==13);
