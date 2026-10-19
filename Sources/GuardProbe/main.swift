@@ -21,4 +21,9 @@ do {
         print("guard-probe --self-test (offline) | --egress | --negative boundTCP|boundUDP|boundSTUN <interface> <localIPv4> <ifindex>\n除 self-test 外显式运行会发送网络探针。")
         if !args.isEmpty{exit(2)}
     }
-} catch {ProbeWorker.diagnostic("worker-failed \(error)");exit(1)}
+} catch {
+    if let echo=error as? StartupEchoFailure,let data=try? JSONEncoder().encode(echo) {
+        print(String(decoding:data,as:UTF8.self))
+    }
+    ProbeWorker.diagnostic("worker-failed \(error)");exit(1)
+}

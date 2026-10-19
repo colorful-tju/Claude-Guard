@@ -51,10 +51,10 @@ public enum ProbeExecutor {
         let result=try commands.run("/usr/bin/curl",["-q","--proxy","","--noproxy","*","--ipv4","--proto","=https","--connect-timeout","5","--max-time","8","--fail","--silent","--show-error",url],timeout:10,cancelled:cancelled)
         guard result.status==0 else {
             // curl exit status distinguishes DNS, TCP, TLS, HTTP and timeout failures.
-            throw fail(echoFailure(service:service,status:result.status,stderr:result.error))
+            throw EchoRequestFailure(description:echoFailure(service:service,status:result.status,stderr:result.error))
         }
         let ip=result.output.trimmingCharacters(in:.whitespacesAndNewlines)
-        guard IPv4.isPublic(ip) else{throw fail("Invalid HTTPS echo response")};return ip
+        guard IPv4.isPublic(ip) else{throw EchoRequestFailure(description:"invalid-https-echo-response")};return ip
     }
 }
 public final class ValidationProbes: @unchecked Sendable {
@@ -73,7 +73,12 @@ public final class ValidationProbes: @unchecked Sendable {
         do {
             let r=try commands.run(Paths.root+"/guard-probe",args,timeout:timeout,cancelled:cancelled)
             try record("worker-finish stage=\(stage) exit=\(r.status) diagnostics=\(r.error.trimmingCharacters(in:.whitespacesAndNewlines))")
-            guard r.status==0 else{throw fail("Probe worker failed at \(stage), exit=\(r.status)")}
+            guard r.status==0 else {
+                if stage=="dual-https",let summary=StartupEchoFailure.decodedSummary(r.output) {
+                    throw fail("Probe worker failed at \(stage), exit=\(r.status); "+summary)
+                }
+                throw fail("Probe worker failed at \(stage), exit=\(r.status)")
+            }
             return Data(r.output.utf8)
         }catch let error as CommandFailure {
             try record("worker-error stage=\(stage) \(error) diagnostics=\(error.stderrPrefix.trimmingCharacters(in:.whitespacesAndNewlines))")

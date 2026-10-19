@@ -10,6 +10,9 @@ public struct Guidance:Equatable {
         if raw.contains("IPv6 default route detected") {
             return .init("需要操作","当前 IPv6 路径不受本版支持","保持 OFF，退出 Claude/Code，点击「临时 IPv6 · 关闭」后重新验证。")
         }
+        if raw.contains("Probe worker failed at dual-https") {
+            return .init("启动核验失败","防护开启后的 HTTPS 出口未能完成核验","查看下方 ipify / webshare 错误详情并导出反馈；尚未证明泄漏，不要放宽防护规则。",severe:true)
+        }
         if raw.contains("Periodic egress mismatch") {
             return .init("出口异常","检测到非预期公网出口，已停止会话","核对节点与预期 IP；原始检测地址保存在反馈中。未单凭此判定国内 IP 已泄漏。",severe:true)
         }

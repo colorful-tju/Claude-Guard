@@ -12,25 +12,34 @@ public struct WorkerSelfTest:Codable,Sendable {
 /// Library isolation is deliberate: synchronous executable main must not wait on MainActor work.
 public enum ProbeWorker {
     private final class Results:@unchecked Sendable {
-        let lock=NSLock();var values:[String:EchoResult]=[:];var failed=false
-        func put(_ key:String,_ value:String?) {
+        let lock=NSLock();var values:[String:EchoResult]=[:];var samples:[EgressService:StartupEchoSample]=[:]
+        func put(_ service:EgressService,_ value:String?,outcome:String,elapsed:Double) {
             lock.lock();defer{lock.unlock()}
-            if let value{values[key] = .init(ipv4:value,measuredAt:monotonic())}else{failed=true}
+            if let value{values[service.rawValue] = .init(ipv4:value,measuredAt:monotonic())}
+            samples[service] = .init(service:service,outcome:outcome,elapsed:elapsed)
         }
-        func read() throws -> [String:EchoResult] {
+        func read(deadlineExceeded:Bool=false,elapsed:Double) throws -> [String:EchoResult] {
             lock.lock();defer{lock.unlock()}
-            guard !failed,values.count==EgressService.allCases.count else{throw fail("HTTPS echo worker failed")}
+            guard !deadlineExceeded,values.count==EgressService.allCases.count else {
+                throw StartupEchoFailure(deadlineExceeded:deadlineExceeded,samples:EgressService.allCases.map{
+                    samples[$0] ?? .init(service:$0,outcome:"pending",elapsed:elapsed)
+                })
+            }
             return values
         }
     }
     public static func collectEchoes(timeout:TimeInterval=10,fetch:@escaping @Sendable (EgressService)throws->String) throws -> [String:EchoResult] {
-        let box=Results(),group=DispatchGroup()
+        let box=Results(),group=DispatchGroup(),clock=SystemGuardClock(),start=SystemGuardClock().sample().uptime
         for service in EgressService.allCases {
             group.enter()
-            DispatchQueue.global().async {defer{group.leave()};box.put(service.rawValue,try? fetch(service))}
+            DispatchQueue.global().async {
+                defer{group.leave()};let began=clock.sample().uptime
+                do {let value=try fetch(service);box.put(service,value,outcome:"ok",elapsed:clock.sample().uptime-began)}
+                catch {box.put(service,nil,outcome:StartupEchoFailure.safeOutcome(error),elapsed:clock.sample().uptime-began)}
+            }
         }
-        guard group.wait(timeout:.now()+timeout) == .success else{throw fail("Concurrent echo deadline exceeded")}
-        return try box.read()
+        let expired=group.wait(timeout:.now()+timeout) != .success
+        return try box.read(deadlineExceeded:expired,elapsed:clock.sample().uptime-start)
     }
     /// Exercises the actual worker executable and subprocess pipeline; no sockets or public probes.
     public static func selfTest(commands:Commands=Commands()) throws -> WorkerSelfTest {
