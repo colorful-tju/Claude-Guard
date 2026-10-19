@@ -21,6 +21,7 @@ public struct MonitoringDiagnostics:Codable,Sendable {
     public let previousRoutes:String?
     public let currentRoutes:String?
     public let previousHealthyAt:String?
+    public var networkEvents:[String]? = nil
     public var recoveryPhase:String="pending"
 
     public init(sessionID:UUID,buildID:String,stage:String,reason:String,baseline:LocalSnapshot,

@@ -17,6 +17,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     var ipv6:TemporaryIPv6?
     var calls:[String]=[]
     var failure:String?
+    func networkEventDiagnostics()->[String] {["type=14 interface=en0 index=12 epoch=2 decision=invalidate signature=test"]}
     var epochValue:UInt64=1
     var routeFingerprint="routes",routeDetail="route details"
     var localPort:UInt16=50000
@@ -288,6 +289,8 @@ struct MonitoringDiagnosticLifecycleTests {
         #expect((value["current"] as? [String:Any])?["routeFingerprint"] as? String=="routes-changed")
         #expect(value["currentRoutes"] as? String=="changed gateway/flags")
         #expect(value["recoveryPhase"] as? String=="off")
+        #expect((value["networkEvents"] as? [String])==f.networkEventDiagnostics())
+        #expect(c.status.report.contains("network-event type=14 interface=en0"))
         let previous=try #require(value["previousHealthy"] as? [String:Any]),original=try #require(value["baseline"] as? [String:Any])
         #expect((previous["connection"] as? [String:Any])?["localPort"] as? Int==60000)
         #expect((original["connection"] as? [String:Any])?["localPort"] as? Int==50000)

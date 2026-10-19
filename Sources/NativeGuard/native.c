@@ -204,15 +204,59 @@ int csg_probe_detailed(int family,int tcp,uint32_t index,const char *source,cons
 }
 int csg_probe(int family,int tcp,uint32_t index,const char *source,const char *target,uint16_t sport,uint16_t dport,int timeout,int stun,int *sent){return csg_probe_detailed(family,tcp,index,source,target,sport,dport,timeout,stun,sent,NULL);}
 int csg_route_open(void){int fd=socket(PF_ROUTE,SOCK_RAW,0);if(fd>=0&&fcntl(fd,F_SETFL,O_NONBLOCK)<0){int error=errno;close(fd);errno=error;return -1;}return fd;}
-/* Expose the event's interface, never infer that a global route epoch is a TUN lifetime. */
-int csg_route_message(const void *data,size_t n,uint32_t *index){
-    *index=0;if(n<4)return -1;const unsigned char *b=data;uint16_t length;memcpy(&length,b,2);
+/* IFINFO counters are not interface lifetimes. Preserve ALL non-statistical
+ * if_data fields (including last administrative change), flags and index.
+ * Only this exact, seeded signature is eligible for duplicate suppression. */
+int csg_route_decode(const void *data,size_t n,CSGRouteEvent *event){
+    memset(event,0,sizeof(*event));if(n<4)return -1;const unsigned char *b=data;uint16_t length;memcpy(&length,b,2);
     if(length!=n||b[2]!=RTM_VERSION)return -1;
-    int type=b[3];
-    if(type==RTM_IFINFO){struct if_msghdr r;if(n<sizeof(r))return -1;memcpy(&r,b,sizeof(r));*index=r.ifm_index;return *index?1:-1;}
-    if(type==RTM_NEWADDR||type==RTM_DELADDR){struct ifa_msghdr r;if(n<sizeof(r))return -1;memcpy(&r,b,sizeof(r));*index=r.ifam_index;return *index?1:-1;}
-    if(type==RTM_ADD||type==RTM_DELETE||type==RTM_CHANGE){struct rt_msghdr r;if(n<sizeof(r))return -1;memcpy(&r,b,sizeof(r));*index=r.rtm_index;if(!(r.rtm_flags&(RTF_LLINFO|RTF_WASCLONED)))return 1;}
-    return 2;
+    event->type=b[3];
+    if(event->type==RTM_IFINFO){
+        struct if_msghdr r;if(n<sizeof(r))return -1;memcpy(&r,b,sizeof(r));event->index=r.ifm_index;
+        _Static_assert(2*sizeof(struct if_data)+16<512,"route signature capacity");
+        struct if_data stable=r.ifm_data;
+        memset((char *)&stable+offsetof(struct if_data,ifi_ipackets),0,
+               offsetof(struct if_data,ifi_lastchange)-offsetof(struct if_data,ifi_ipackets));
+        int used=snprintf(event->signature,sizeof(event->signature),"%u:",(unsigned)r.ifm_flags);
+        const unsigned char *bytes=(const unsigned char *)&stable;
+        for(size_t i=0;i<sizeof(stable);i++)used+=snprintf(event->signature+used,sizeof(event->signature)-(size_t)used,"%02x",bytes[i]);
+        return event->index?1:-1;
+    }
+    if(event->type==RTM_NEWADDR||event->type==RTM_DELADDR){struct ifa_msghdr r;if(n<sizeof(r))return -1;memcpy(&r,b,sizeof(r));event->index=r.ifam_index;return event->index?1:-1;}
+    if(event->type==RTM_ADD||event->type==RTM_DELETE||event->type==RTM_CHANGE||event->type==RTM_REDIRECT){
+        struct rt_msghdr r;if(n<sizeof(r))return -1;memcpy(&r,b,sizeof(r));event->index=r.rtm_index;
+        if(event->type!=RTM_REDIRECT&&(r.rtm_flags&(RTF_LLINFO|RTF_WASCLONED)))return 2;
+        return 1;
+    }
+    /* Read-only replies and multicast membership do not alter unicast policy.
+     * Every other message is conservative, including IFINFO2/unknown types. */
+    if(event->type==RTM_GET||event->type==RTM_GET2||event->type==RTM_MISS||event->type==RTM_RESOLVE||
+       event->type==RTM_NEWMADDR||event->type==RTM_DELMADDR||event->type==RTM_NEWMADDR2)return 2;
+    return 1;
 }
-int csg_route_read_event(int fd,uint32_t *index){unsigned char b[8192];*index=0;ssize_t n=read(fd,b,sizeof(b));if(n<0)return errno==EAGAIN?0:-1;if(n==(ssize_t)sizeof(b))return -1;return csg_route_message(b,(size_t)n,index);}
+int csg_route_next(int fd,CSGRouteEvent *event){
+    unsigned char b[8192];memset(event,0,sizeof(*event));ssize_t n=read(fd,b,sizeof(b));
+    if(n<0)return errno==EAGAIN?0:-1;if(n==(ssize_t)sizeof(b))return -1;
+    return csg_route_decode(b,(size_t)n,event);
+}
+/* Socket is opened BEFORE this snapshot so intervening changes stay queued.
+ * Seed failure disables suppression, never disables the event monitor. */
+int csg_route_seed(CSGRouteEvent *events,int capacity){
+    int mib[]={CTL_NET,PF_ROUTE,0,0,NET_RT_IFLIST,0};size_t size=0;
+    if(sysctl(mib,6,NULL,&size,NULL,0)<0||size==0||size>4*1024*1024)return -1;
+    unsigned char *data=malloc(size);if(!data)return -1;
+    if(sysctl(mib,6,data,&size,NULL,0)<0){free(data);return -1;}
+    size_t offset=0;int count=0;
+    while(offset<size){
+        uint16_t length;if(size-offset<4){count=-1;break;}memcpy(&length,data+offset,2);
+        if(length<4||length>size-offset){count=-1;break;}
+        CSGRouteEvent e;int result=csg_route_decode(data+offset,length,&e);
+        if(result<0){count=-1;break;}
+        if(e.type==RTM_IFINFO){if(count>=capacity){count=-1;break;}events[count++]=e;}
+        offset+=length;
+    }
+    free(data);return count;
+}
+int csg_route_message(const void *data,size_t n,uint32_t *index){CSGRouteEvent e;int r=csg_route_decode(data,n,&e);*index=e.index;return r;}
+int csg_route_read_event(int fd,uint32_t *index){CSGRouteEvent e;int r=csg_route_next(fd,&e);*index=e.index;return r;}
 int csg_route_read(int fd){uint32_t index;return csg_route_read_event(fd,&index);}

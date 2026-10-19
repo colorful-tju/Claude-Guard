@@ -24,6 +24,24 @@ int main(void) {
     struct rt_msghdr route={0};route.rtm_msglen=sizeof(route);route.rtm_version=RTM_VERSION;route.rtm_type=RTM_CHANGE;route.rtm_index=14;
     assert(csg_route_message(&route,sizeof(route),&index)==1 && index==14);
     route.rtm_flags=RTF_WASCLONED;assert(csg_route_message(&route,sizeof(route),&index)==2);
+    route.rtm_type=RTM_REDIRECT;route.rtm_flags=0;
+    assert(csg_route_message(&route,sizeof(route),&index)==1 && index==14);
+    CSGRouteEvent first,second;
+    interface.ifm_flags=IFF_UP;interface.ifm_data.ifi_mtu=1500;
+    assert(csg_route_decode(&interface,sizeof(interface),&first)==1);
+    interface.ifm_data.ifi_ipackets=123;interface.ifm_data.ifi_obytes=9000;
+    assert(csg_route_decode(&interface,sizeof(interface),&second)==1);
+    assert(strcmp(first.signature,second.signature)==0);
+    interface.ifm_data.ifi_mtu=1400;csg_route_decode(&interface,sizeof(interface),&second);
+    assert(strcmp(first.signature,second.signature)!=0);
+    interface.ifm_data.ifi_mtu=1500;interface.ifm_data.ifi_lastchange.tv_sec=1;
+    csg_route_decode(&interface,sizeof(interface),&second);assert(strcmp(first.signature,second.signature)!=0);
+    interface.ifm_data.ifi_lastchange.tv_sec=0;interface.ifm_flags=0;
+    csg_route_decode(&interface,sizeof(interface),&second);assert(strcmp(first.signature,second.signature)!=0);
+    interface.ifm_type=255;assert(csg_route_decode(&interface,sizeof(interface),&second)==1);
+    CSGRouteEvent seed[512];int seed_count=csg_route_seed(seed,512);
+    assert(seed_count>0 && seed_count<=512);
+    for(int i=0;i<seed_count;i++)assert(seed[i].type==RTM_IFINFO && seed[i].index>0 && seed[i].signature[0]);
     CSGProcess self={0};
     if(csg_process(getpid(),&self)!=0 || self.pid!=getpid() || !self.path[0]) {
         fprintf(stderr,"Live self process identity missing\n");return 1;

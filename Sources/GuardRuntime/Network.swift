@@ -11,12 +11,35 @@ public struct NetworkView: Sendable {
     public var interfaces:[InterfaceIdentity];public var detail:String;public var physical:InterfaceIdentity;public var tun:InterfaceIdentity
     public var ipv6Routable:Bool
 }
+/// Suppression is limited to an exact IFINFO semantic match. Address/route
+/// changes and down/up sequences always invalidate, even if snapshots recover.
+struct RouteNotificationGate {
+    private var signatures:[UInt32:String]
+    init(initial:[UInt32:String]) {signatures=initial}
+    mutating func invalidates(type:UInt32,index:UInt32,signature:String)->Bool {
+        guard type==14,index>0,!signature.isEmpty else {
+            signatures.removeValue(forKey:index)
+            return true
+        }
+        let duplicate=signatures[index]==signature
+        signatures[index]=signature
+        return !duplicate
+    }
+}
 public final class NetworkEvents: @unchecked Sendable {
-    private let lock=NSLock();private var generation:UInt64=1;private var failed=false
+    private var generation:UInt64=1;private var failed=false
+    private var gate=RouteNotificationGate(initial:[:])
+    private let historyLock=NSLock()
+    private var history:[String]=[]
     private let routeQueue=DispatchQueue(label:"guard.route-events")
     private var source:DispatchSourceRead?;private var fd:Int32 = -1
     public init() throws {
         fd=csg_route_open();guard fd>=0 else{throw fail("Route-event monitor unavailable")}
+        var seed=[CSGRouteEvent](repeating:CSGRouteEvent(),count:512)
+        let count=csg_route_seed(&seed,Int32(seed.count))
+        var initial:[UInt32:String]=[:]
+        if count>0 {for var event in seed.prefix(Int(count)){initial[event.index]=NativeProcesses.text(&event.signature)}}
+        gate=RouteNotificationGate(initial:initial)
         let s=DispatchSource.makeReadSource(fileDescriptor:fd,queue:routeQueue);source=s
         s.setEventHandler {[weak self] in self?.drain()}
         s.resume()
@@ -24,19 +47,28 @@ public final class NetworkEvents: @unchecked Sendable {
     static func isAuxiliaryInterface(_ name:String)->Bool {name=="awdl0" || name=="llw0"}
     private func drain(){
         while true {
-            var index:UInt32=0
-            let r=csg_route_read_event(fd,&index)
+            var event=CSGRouteEvent()
+            let r=csg_route_next(fd,&event)
             if r==0{break};if r==2{continue}
-            // These exact interfaces cannot be policy.physical (enN) or policy.tun (utunN).
-            // PF's default deny still covers them. Full snapshots continue to reject
-            // changes to interface indices, flags, IPv4/global IPv6, or verified routes.
-            var name=[CChar](repeating:0,count:Int(IF_NAMESIZE))
-            if r==1,index>0,if_indextoname(index,&name) != nil,
-               Self.isAuxiliaryInterface(String(decoding:name.prefix{ $0 != 0 }.map{UInt8(bitPattern:$0)},as:UTF8.self)){continue}
-            lock.lock();generation += 1;if r<0{failed=true};lock.unlock();if r<0{break}
+            var buffer=[CChar](repeating:0,count:Int(IF_NAMESIZE))
+            let name=event.index>0 && if_indextoname(event.index,&buffer) != nil ?
+                String(decoding:buffer.prefix{$0 != 0}.map{UInt8(bitPattern:$0)},as:UTF8.self):"unknown"
+            let signature=NativeProcesses.text(&event.signature)
+            let auxiliary=r==1 && Self.isAuxiliaryInterface(name)
+            let invalidates=r<0 || (!auxiliary && gate.invalidates(type:event.type,index:event.index,signature:signature))
+            if invalidates{generation += 1}
+            if r<0{failed=true}
+            let decision=r<0 ? "read-failed" : auxiliary ? "auxiliary" : invalidates ? "invalidate" : "duplicate-ifinfo"
+            historyLock.lock()
+            history.append("\(ISO8601DateFormatter().string(from:Date())) type=\(event.type) interface=\(name) index=\(event.index) epoch=\(generation) decision=\(decision) signature=\(signature)")
+            if history.count>32{history.removeFirst(history.count-32)}
+            historyLock.unlock()
+            if r<0{break}
         }
     }
-    public func epoch() throws -> UInt64 {routeQueue.sync{drain()};lock.lock();defer{lock.unlock()};guard !failed else{throw fail("Route events lost")};return generation}
+    public func epoch() throws -> UInt64 {try routeQueue.sync{drain();guard !failed else{throw fail("Route events lost")};return generation}}
+    // Diagnostic copying must not queue behind a busy route drain before stopping Claude.
+    public func diagnostics()->[String] {historyLock.lock();defer{historyLock.unlock()};return history}
     deinit {source?.cancel();if fd>=0{close(fd)}}
 }
 public enum Networks {

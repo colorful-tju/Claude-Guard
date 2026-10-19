@@ -21,8 +21,11 @@ public protocol RuntimeInspecting: Sendable {
     func node() throws -> NodeConfiguration
     func runtime(settings:Settings) throws -> RuntimeEvidence
     func epoch() throws -> UInt64
+    func networkEventDiagnostics() -> [String]
 }
+extension RuntimeInspecting {public func networkEventDiagnostics()->[String] {[]}}
 extension Inspector: RuntimeInspecting {
+    public func networkEventDiagnostics()->[String] {events.diagnostics()}
     public func epoch() throws -> UInt64 { try events.epoch() }
 }
 

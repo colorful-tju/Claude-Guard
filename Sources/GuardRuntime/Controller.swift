@@ -359,8 +359,10 @@ public final class Controller: @unchecked Sendable {
         var diagnostic=MonitoringDiagnostics(sessionID:policy.sessionID,buildID:BuildIdentity.buildID,stage:stage,reason:reason,
             baseline:baseline,previousHealthy:previousHealthy,current:current,baselineRoutes:baselineRoutes,
             previousRoutes:previousRoutes,currentRoutes:routes,previousHealthyAt:previousHealthyAt,acceptedRouteEquivalence:acceptedRouteEquivalence)
+        diagnostic.networkEvents=inspector.networkEventDiagnostics()
         stopForIncident(reason:reason,hadClaude:launched || !(current?.claudeProcesses.isEmpty ?? true))
         diagnostic.recoveryPhase=status.phase
+        for event in diagnostic.networkEvents ?? [] {log("network-event "+event)}
         do {
             try storage.writeMonitoringDiagnostic(diagnostic)
             log("monitor diagnostic saved session=\(policy.sessionID) stage=\(stage) currentComplete=\(diagnostic.currentComplete) changed=\(diagnostic.changedFields.joined(separator:",")) recovery=\(status.phase) file=last-monitoring-failure.json")

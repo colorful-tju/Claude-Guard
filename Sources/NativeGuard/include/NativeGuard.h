@@ -28,6 +28,10 @@ enum { CSG_PROBE_SOCKET=1, CSG_PROBE_BOUND_IF=2, CSG_PROBE_ADDRESS=3, CSG_PROBE_
        CSG_PROBE_NONBLOCKING=5, CSG_PROBE_CONNECT=6, CSG_PROBE_POLL=7,
        CSG_PROBE_SOCKET_ERROR=8, CSG_PROBE_SEND=9, CSG_PROBE_RECEIVE=10 };
 int csg_probe_detailed(int family, int tcp, uint32_t index, const char *source, const char *target, uint16_t source_port, uint16_t target_port, int timeout_ms, int stun, int *sent, CSGProbeDiagnostics *diagnostics);
+typedef struct { uint32_t type, index; char signature[512]; } CSGRouteEvent;
+int csg_route_decode(const void *data, size_t length, CSGRouteEvent *event);
+int csg_route_next(int fd, CSGRouteEvent *event);
+int csg_route_seed(CSGRouteEvent *events, int capacity);
 int csg_route_open(void);
 int csg_route_read(int fd);
 int csg_route_read_event(int fd, uint32_t *interface_index);
