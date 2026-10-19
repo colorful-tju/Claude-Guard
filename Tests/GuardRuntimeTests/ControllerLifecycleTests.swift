@@ -19,6 +19,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     var failure:String?
     func networkEventDiagnostics()->[String] {["type=14 interface=en0 index=12 epoch=2 decision=invalidate signature=test"]}
     var epochValue:UInt64=1
+    var identityGeneration:UInt64=1
     var routeFingerprint="routes",routeDetail="route details"
     var localPort:UInt16=50000
     var rules="",reference=false,enabled=false
@@ -63,8 +64,8 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     func runtime(settings:Settings) throws -> RuntimeEvidence {
         try step("runtime")
         let core=ProcessIdentity(pid:2345,startTime:100,executableIdentity:"core")
-        let physical=InterfaceIdentity(name:"en0",index:6,generation:1,ipv4:"172.21.191.84")
-        let tun=InterfaceIdentity(name:"utun4",index:20,generation:1,ipv4:"198.18.0.1")
+        let physical=InterfaceIdentity(name:"en0",index:6,generation:identityGeneration,ipv4:"172.21.191.84")
+        let tun=InterfaceIdentity(name:"utun4",index:20,generation:identityGeneration,ipv4:"198.18.0.1")
         return .init(node:try node(),core:core,connection:.init(owner:core,gateway:"23.20.10.8",port:5376,localAddress:physical.ipv4,localPort:localPort,established:true),network:.init(interfaces:[physical,tun],detail:"interfaces",physical:physical,tun:tun,ipv6Routable:false),routeFingerprint:routeFingerprint,routeDetail:routeDetail,epoch:epochValue,claude:claude.map(\.identity))
     }
     func epoch() throws -> UInt64 {try step("epoch");return epochValue}
@@ -366,6 +367,38 @@ struct MonitoringBlockedRecoveryTests {
 
 // Replays the captured 0.2.9 failure through the real Controller. Only external effects are substituted.
 struct PublicRouteCloneLifecycleTests {
+    @Test func routeRevalidationCannotHidePFOrInterfaceChanges() throws {
+        for change in ["identity","route","pf"] {
+            let f=try LifecycleFixture(),c=try f.makeController()
+            f.routeFingerprint=hash(Data(f.routeDetail.utf8))
+            c.heartbeat();try c.begin(f.settings,launch:false)
+            f.epochValue += 1
+            if change=="identity" {f.identityGeneration += 1}
+            if change=="route" {f.routeDetail="changed";f.routeFingerprint=hash(Data(f.routeDetail.utf8))}
+            if change=="pf" {f.rules="tampered"}
+            c.tick()
+            #expect(c.status.phase != "armed")
+            #expect(f.calls.contains("terminate"))
+        }
+    }
+    @Test func startupStillRejectsRouteNotificationEvenWhenPathsMatch() throws {
+        let f=try LifecycleFixture(),c=try f.makeController()
+        f.routeFingerprint=hash(Data(f.routeDetail.utf8))
+        c.heartbeat();f.beforeProbe={f.epochValue += 1}
+        reject {try c.begin(f.settings,launch:true)}
+        #expect(f.launches==0)
+    }
+    @Test func routeNotificationWithIdenticalProtectedEvidenceDoesNotStop() throws {
+        let f=try LifecycleFixture(),c=try f.makeController()
+        f.routeFingerprint=hash(Data(f.routeDetail.utf8))
+        c.heartbeat();try c.begin(f.settings,launch:false)
+        f.epochValue += 1;c.tick()
+        #expect(c.status.phase=="armed")
+        #expect(f.reference && !f.rules.isEmpty)
+        #expect(!f.calls.contains("terminate"))
+        #expect(c.status.report.contains("route notification revalidated"))
+    }
+
     private func routes() throws -> (parent:String,clone:String) {
         let file=URL(fileURLWithPath:#filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Fixtures/public-route-clone-029.json")
         let data=try #require(JSONSerialization.jsonObject(with:Data(contentsOf:file)) as? [String:String])
@@ -465,12 +498,12 @@ struct PublicRouteCloneLifecycleTests {
     @Test func validCloneCannotHideAnotherChangedPremiseAndDiagnosticKeepsTheRawEvidence() throws {
         let r=try routes(),f=try LifecycleFixture();setRoute(r.parent,on:f)
         let c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
-        setRoute(r.clone,on:f);f.epochValue += 1;c.tick()
-        #expect(c.status.phase=="off" && !c.status.verified && c.status.lastRisk.contains("epoch"))
+        setRoute(r.clone,on:f);f.epochValue += 1;f.identityGeneration += 1;c.tick()
+        #expect(c.status.phase=="off" && !c.status.verified && c.status.lastRisk.contains("Incomplete runtime"))
         let value=try #require(JSONSerialization.jsonObject(with:Data(contentsOf:URL(fileURLWithPath:f.root+"/last-monitoring-failure.json"))) as? [String:Any])
-        #expect(value["acceptedRouteEquivalence"] as? Bool==true)
-        #expect(value["changedFields"] as? [String]==["epoch"])
-        #expect(value["rawChangedFields"] as? [String]==["epoch","routeFingerprint"])
+        #expect(value["acceptedRouteEquivalence"] as? Bool==false)
+        #expect(value["changedFields"] as? [String]==["epoch","interfaces","routeFingerprint","verifiedTun"])
+        #expect(value["rawChangedFields"] as? [String]==["epoch","interfaces","routeFingerprint","verifiedTun"])
         #expect(value["currentRoutes"] as? String==r.clone)
     }
     @Test func hashMismatchCannotBeUsedAsAnEquivalenceProof() throws {
@@ -669,6 +702,35 @@ struct PeriodicEgressControllerTests {
         for _ in 0..<200 {
             if c.queue.sync(execute:{c.status.periodicEgress != nil}) {return}
             Thread.sleep(forTimeInterval:0.005)
+        }
+    }
+    @Test func echoCompletionRevalidatesChangedRouteEpochButNeverPFOrIdentity() throws {
+        for change in ["route-only","identity","pf"] {
+            let f=try LifecycleFixture(),c=try f.makeController()
+            f.routeFingerprint=hash(Data(f.routeDetail.utf8))
+            let entered=DispatchSemaphore(value:0),release=DispatchSemaphore(value:0)
+            f.healthOverride={
+                entered.signal()
+                guard release.wait(timeout:.now()+5) == .success else{throw fail("test synchronization timeout")}
+                let now=f.clock.sample().uptime
+                return EgressMonitorTests().report("1.1.1.1","1.1.1.1",finished:now)
+            }
+            try c.queue.sync {c.heartbeat();try c.begin(f.settings,launch:false);f.clock.advance(15);c.heartbeat();c.tick()}
+            #expect(entered.wait(timeout:.now()+5) == .success)
+            c.queue.sync {
+                f.epochValue += 1
+                if change=="identity" {f.identityGeneration += 1}
+                if change=="pf" {f.rules="tampered"}
+            }
+            release.signal()
+            for _ in 0..<200 {
+                if c.queue.sync(execute:{c.status.periodicEgress != nil || c.status.phase != "armed"}) {break}
+                Thread.sleep(forTimeInterval:0.005)
+            }
+            if change=="route-only" {
+                #expect(c.queue.sync{c.status.phase}=="armed")
+                #expect(c.queue.sync{c.status.report.contains("revalidated before egress")})
+            } else {#expect(c.queue.sync{c.status.phase} != "armed")}
         }
     }
     @Test func realControllerRejectsMismatchingReportWithoutRetry() throws {

@@ -27,6 +27,13 @@ int main(void) {
     route.rtm_type=RTM_REDIRECT;route.rtm_flags=0;
     assert(csg_route_message(&route,sizeof(route),&index)==1 && index==14);
     CSGRouteEvent first,second;
+    route.rtm_type=RTM_ADD;route.rtm_errno=EEXIST;route.rtm_index=0;
+    assert(csg_route_decode(&route,sizeof(route),&first)==1 && first.error==EEXIST);
+    assert(strstr(first.signature,"errno=17") && strstr(first.signature,"flags="));
+    route.rtm_errno=-1;assert(csg_route_decode(&route,sizeof(route),&first)==-1);
+    route.rtm_errno=0;route.rtm_flags=0;
+    assert(csg_route_decode(&route,sizeof(route),&first)==1 && first.error==0);
+
     interface.ifm_flags=IFF_UP;interface.ifm_data.ifi_mtu=1500;
     assert(csg_route_decode(&interface,sizeof(interface),&first)==1);
     interface.ifm_data.ifi_ipackets=123;interface.ifm_data.ifi_obytes=9000;

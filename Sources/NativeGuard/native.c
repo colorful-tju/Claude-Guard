@@ -264,6 +264,15 @@ int csg_route_decode(const void *data,size_t n,CSGRouteEvent *event){
     if(event->type==RTM_NEWADDR||event->type==RTM_DELADDR){struct ifa_msghdr r;if(n<sizeof(r))return -1;memcpy(&r,b,sizeof(r));event->index=r.ifam_index;return event->index?1:-1;}
     if(event->type==RTM_ADD||event->type==RTM_DELETE||event->type==RTM_CHANGE||event->type==RTM_REDIRECT){
         struct rt_msghdr r;if(n<sizeof(r))return -1;memcpy(&r,b,sizeof(r));event->index=r.rtm_index;
+        event->error=r.rtm_errno;
+        if(r.rtm_errno<0)return -1;
+        /* Retain bounded route metadata for diagnosis, including unsuccessful
+         * requests. Never infer a changed interface from a route message. */
+        int used=snprintf(event->signature,sizeof(event->signature),"errno=%d flags=%x pid=%d seq=%d addrs=%x payload=",r.rtm_errno,r.rtm_flags,r.rtm_pid,r.rtm_seq,r.rtm_addrs);
+        for(size_t i=sizeof(r);i<n && used+3<(int)sizeof(event->signature);i++)
+            used+=snprintf(event->signature+used,sizeof(event->signature)-(size_t)used,"%02x",b[i]);
+        if(r.rtm_errno != 0)return 1;
+
         if(event->type!=RTM_REDIRECT&&(r.rtm_flags&(RTF_LLINFO|RTF_WASCLONED)))return 2;
         return 1;
     }

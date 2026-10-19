@@ -18,6 +18,18 @@ enum MonitoringRouteEvidence {
         var compared=current;compared.routeFingerprint=baseline.routeFingerprint
         return compared
     }
+    /// Only an ARMED session may revalidate a routing-table notification. Keep
+    /// the immutable baseline, interface lifetimes, PF rules and all other gates.
+    static func revalidated(_ current:LocalSnapshot,baseline:LocalSnapshot,currentRoutes:String,
+                            baselineRoutes:String,policy:GuardPolicy) -> LocalSnapshot {
+        let compared=comparison(current,baseline:baseline,currentRoutes:currentRoutes,baselineRoutes:baselineRoutes,policy:policy)
+        guard current.epoch != baseline.epoch,
+              current.routeFingerprint==hash(Data(currentRoutes.utf8)),
+              baseline.routeFingerprint==hash(Data(baselineRoutes.utf8)) else{return compared}
+        var candidate=compared;candidate.epoch=baseline.epoch
+        do {try MonitoringGate.validate(candidate,baseline:baseline,policy:policy);return candidate}
+        catch {return compared}
+    }
     // Runtime-only: preserve names, indices, flags, all other interfaces and
     // every non-link-local address. This does not authorize auxiliary traffic.
     private static func equivalentInventory(_ a:String,_ b:String)->Bool {

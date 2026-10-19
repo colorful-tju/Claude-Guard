@@ -2,6 +2,21 @@ import Testing
 @testable import GuardRuntime
 
 struct RouteNotificationTests {
+    @Test func routingEventsDoNotPretendInterfacesWereRecreated() {
+        var gate=RouteNotificationGate(initial:[12:"same"])
+        for type:UInt32 in [1,2,3] {
+            let invalidates=gate.invalidates(type:type,index:0,signature:"route");#expect(invalidates)
+            #expect(gate.identityGeneration==1)
+        }
+        let duplicate=gate.invalidates(type:14,index:12,signature:"same");#expect(!duplicate)
+        #expect(gate.identityGeneration==1)
+        for type:UInt32 in [6,12,13,18,255] {
+            let before=gate.identityGeneration
+            let invalidates=gate.invalidates(type:type,index:12,signature:"changed");#expect(invalidates)
+            #expect(gate.identityGeneration==before+1)
+        }
+    }
+
     @Test func repeatedInformationDoesNotInvalidateInterfaceIdentity() {
         var gate=RouteNotificationGate(initial:[12:"same",19:"tun"])
         let result1 = !gate.invalidates(type:14,index:12,signature:"same"); #expect(result1)

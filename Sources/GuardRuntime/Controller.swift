@@ -235,9 +235,12 @@ public final class Controller: @unchecked Sendable {
             let current=try snapshot(evidence,policy:policy);observed=current
             stage="livenessAfterSnapshot";try requireActive()
             stage="premisesComparison"
-            let compared=MonitoringRouteEvidence.comparison(current,baseline:baseline,currentRoutes:evidence.routeDetail,baselineRoutes:baselineRoutes,policy:policy)
+            let compared=MonitoringRouteEvidence.revalidated(current,baseline:baseline,currentRoutes:evidence.routeDetail,baselineRoutes:baselineRoutes,policy:policy)
             acceptedRouteEquivalence=compared.routeFingerprint != current.routeFingerprint
             try MonitoringGate.validate(compared,baseline:baseline,policy:policy)
+            if current.epoch != (previousHealthy?.epoch ?? baseline.epoch) {
+                log("route notification revalidated epoch=\(previousHealthy?.epoch ?? baseline.epoch)->\(current.epoch); interface lifetimes, protected paths and PF unchanged")
+            }
             if acceptedRouteEquivalence,previousHealthy?.routeFingerprint != current.routeFingerprint {
                 log("monitor route equivalent session=\(policy.sessionID) target=1.1.1.1 tun=\(policy.tun.name) gateway=\(policy.tun.ipv4) baseline=\(baseline.routeFingerprint) current=\(current.routeFingerprint)")
             }
@@ -291,8 +294,22 @@ public final class Controller: @unchecked Sendable {
         }
     }
     private func acceptEgress(_ report:EgressReport,policy:GuardPolicy,baseline:LocalSnapshot) {
+        var observed:LocalSnapshot?,routes:String?
         do {
-            try requireActive();try requireEpoch(previousHealthy?.epoch ?? baseline.epoch)
+            try requireActive()
+            // An asynchronous echo may finish after a harmless routing notification.
+            // Recollect local evidence instead of trusting the old epoch or the echo alone.
+            if try inspector.epoch() != (previousHealthy?.epoch ?? baseline.epoch) {
+                guard let settings else{throw fail("Runtime settings unavailable")}
+                let evidence=try inspector.runtime(settings:settings);routes=evidence.routeDetail
+                let current=try snapshot(evidence,policy:policy);observed=current
+                let compared=MonitoringRouteEvidence.revalidated(current,baseline:baseline,currentRoutes:evidence.routeDetail,baselineRoutes:baselineRoutes,policy:policy)
+                try MonitoringGate.validate(compared,baseline:baseline,policy:policy)
+                try requireActive();try requireEpoch(current.epoch)
+                log("route notification revalidated before egress result epoch=\(current.epoch); local protection verified")
+                previousHealthy=current;previousRoutes=evidence.routeDetail
+                previousHealthyAt=ISO8601DateFormatter().string(from:Date())
+            }
             guard var monitor=egressMonitor else{throw fail("Periodic egress monitor unavailable")}
             let now=effects.clock.sample().uptime,age=now-monitor.lastVerifiedAt
             let decision=monitor.consume(report,expected:policy.endpoint.expectedEgress,now:now)
@@ -311,7 +328,7 @@ public final class Controller: @unchecked Sendable {
             case .retry:status.egressRechecking=true
             case .stop(let reason):recordMonitoringFailure(policy:policy,baseline:baseline,stage:"periodicEgress",reason:reason,current:nil,routes:nil)
             }
-        }catch {recordMonitoringFailure(policy:policy,baseline:baseline,stage:"periodicEgress",reason:String(describing:error),current:nil,routes:nil)}
+        }catch {recordMonitoringFailure(policy:policy,baseline:baseline,stage:"periodicEgress",reason:String(describing:error),current:observed,routes:routes)}
     }
     private func updateBlockStatistics() {
         do {

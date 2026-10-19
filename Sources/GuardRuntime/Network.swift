@@ -11,18 +11,23 @@ public struct NetworkView: Sendable {
     public var interfaces:[InterfaceIdentity];public var detail:String;public var physical:InterfaceIdentity;public var tun:InterfaceIdentity
     public var ipv6Routable:Bool
 }
-/// Suppression is limited to an exact IFINFO semantic match. Address/route
-/// changes and down/up sequences always invalidate, even if snapshots recover.
+/// Event epoch protects collection transactions; interface generation records
+/// lifecycle/address/unknown events, never ordinary routing-table notifications.
 struct RouteNotificationGate {
     private var signatures:[UInt32:String]
+    private(set) var identityGeneration:UInt64=1
     init(initial:[UInt32:String]) {signatures=initial}
     mutating func invalidates(type:UInt32,index:UInt32,signature:String)->Bool {
+        // Ordinary route events trigger revalidation, not interface recreation.
+        if [UInt32(1),2,3].contains(type) {return true}
         guard type==14,index>0,!signature.isEmpty else {
+            identityGeneration += 1
             signatures.removeValue(forKey:index)
             return true
         }
         let duplicate=signatures[index]==signature
         signatures[index]=signature
+        if !duplicate {identityGeneration += 1}
         return !duplicate
     }
 }
@@ -55,18 +60,20 @@ public final class NetworkEvents: @unchecked Sendable {
                 String(decoding:buffer.prefix{$0 != 0}.map{UInt8(bitPattern:$0)},as:UTF8.self):"unknown"
             let signature=NativeProcesses.text(&event.signature)
             let auxiliary=r==1 && Self.isAuxiliaryInterface(name)
-            let invalidates=r<0 || (!auxiliary && gate.invalidates(type:event.type,index:event.index,signature:signature))
+            let failedRequest=r==1 && [UInt32(1),2,3].contains(event.type) && event.error>0
+            let invalidates=r<0 || (!auxiliary && !failedRequest && gate.invalidates(type:event.type,index:event.index,signature:signature))
             if invalidates{generation += 1}
             if r<0{failed=true}
-            let decision=r<0 ? "read-failed" : auxiliary ? "auxiliary" : invalidates ? "invalidate" : "duplicate-ifinfo"
+            let decision=r<0 ? "read-failed" : failedRequest ? "failed-route-request" : auxiliary ? "auxiliary" : invalidates ? "invalidate" : "duplicate-ifinfo"
             historyLock.lock()
-            history.append("\(ISO8601DateFormatter().string(from:Date())) type=\(event.type) interface=\(name) index=\(event.index) epoch=\(generation) decision=\(decision) signature=\(signature)")
+            history.append("\(ISO8601DateFormatter().string(from:Date())) type=\(event.type) interface=\(name) index=\(event.index) epoch=\(generation) identityGeneration=\(gate.identityGeneration) decision=\(decision) signature=\(signature)")
             if history.count>32{history.removeFirst(history.count-32)}
             historyLock.unlock()
             if r<0{break}
         }
     }
     public func epoch() throws -> UInt64 {try routeQueue.sync{drain();guard !failed else{throw fail("Route events lost")};return generation}}
+    public func interfaceGeneration() throws -> UInt64 {try routeQueue.sync{drain();guard !failed else{throw fail("Route events lost")};return gate.identityGeneration}}
     // Diagnostic copying must not queue behind a busy route drain before stopping Claude.
     public func diagnostics()->[String] {historyLock.lock();defer{historyLock.unlock()};return history}
     deinit {source?.cancel();if fd>=0{close(fd)}}

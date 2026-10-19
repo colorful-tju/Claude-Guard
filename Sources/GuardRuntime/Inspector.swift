@@ -40,7 +40,7 @@ public final class Inspector: @unchecked Sendable {
             }
         }
         guard tuns.count==1,let tun=tuns.first else{throw fail("Cannot attribute exactly one TUN to verified Core control socket")}
-        let network=try Networks.read(physicalName:settings.physical,tunName:tun,epoch:before,commands:commands)
+        let network=try Networks.read(physicalName:settings.physical,tunName:tun,epoch:try events.interfaceGeneration(),commands:commands)
         // Read-only eligibility gate: Controller has not created a journal or
         // loaded/enabled PF when its initial runtime collection reaches here.
         try MVPNetworkRequirements.validate(ipv6Routable:network.ipv6Routable)
