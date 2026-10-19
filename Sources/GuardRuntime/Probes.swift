@@ -48,7 +48,7 @@ public enum ProbeExecutor {
     public static func egress(service:EgressService,commands:Commands,cancelled:@escaping @Sendable ()->Bool={false}) throws -> String {
         let url=service == .ipify ? "https://api.ipify.org" : "https://ipv4.webshare.io/"
         // -q first suppresses ~/.curlrc. Empty proxy + noproxy suppresses all ambient proxy settings.
-        let result=try commands.run("/usr/bin/curl",["-q","--proxy","","--noproxy","*","--ipv4","--proto","=https","--connect-timeout","5","--max-time","8","--fail","--silent","--show-error",url],timeout:10,cancelled:cancelled)
+        let result=try commands.run("/usr/bin/curl",["-q","--proxy","","--noproxy","*","--ipv4","--proto","=https","--connect-timeout","5","--max-time","8","--fail","--silent","--show-error",url],timeout:EgressTiming.requestTimeout,cancelled:cancelled)
         guard result.status==0 else {
             // curl exit status distinguishes DNS, TCP, TLS, HTTP and timeout failures.
             throw EchoRequestFailure(description:echoFailure(service:service,status:result.status,stderr:result.error))

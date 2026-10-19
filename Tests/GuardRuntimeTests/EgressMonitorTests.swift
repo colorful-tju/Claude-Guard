@@ -41,7 +41,7 @@ struct EgressMonitorTests {
         #expect(monitor.consume(report(nil,nil,finished:117),expected:"1.1.1.1",now:117) == .retry("services-unavailable"))
         #expect(monitor.nextCheckAt==123)
         #expect(monitor.consume(report(nil,nil,finished:124),expected:"1.1.1.1",now:124) == .retry("services-unavailable"))
-        #expect(monitor.nextCheckAt==134)
+        #expect(monitor.nextCheckAt==133)
         #expect(monitor.lastVerifiedAt==100 && !monitor.expired(at:134))
         #expect(monitor.consume(report(nil,nil,finished:135),expected:"1.1.1.1",now:135) == .stop("Periodic egress retry limit: services-unavailable"))
         #expect(monitor.expired(at:145))
@@ -58,8 +58,24 @@ struct EgressMonitorTests {
         var monitor=EgressMonitor(verifiedAt:100)
         _=monitor.consume(report(nil,nil,finished:130),expected:"1.1.1.1",now:130)
         _=monitor.consume(report(nil,nil,finished:140),expected:"1.1.1.1",now:140)
-        #expect(monitor.nextCheckAt==150 && monitor.expired(at:145))
+        #expect(monitor.nextCheckAt==140 && monitor.expired(at:145))
         #expect(monitor.consume(report("1.1.1.1","1.1.1.1",finished:150),expected:"1.1.1.1",now:150) == .stop("Periodic egress proof expired"))
+    }
+    @Test func incidentRetryReservesRequestAndSchedulingBudget() {
+        var monitor=EgressMonitor(verifiedAt:100)
+        _=monitor.consume(report(nil,nil,finished:120.21),expected:"1.1.1.1",now:120.21)
+        #expect(monitor.nextCheckAt==126.21)
+        _=monitor.consume(report(nil,nil,finished:130.916),expected:"1.1.1.1",now:130.916)
+        #expect(monitor.nextCheckAt==133)
+        #expect(monitor.nextCheckAt+10+2==145)
+        #expect(monitor.lastVerifiedAt==100 && monitor.failures==2)
+        #expect(monitor.consume(report("1.1.1.1",nil,finished:143),expected:"1.1.1.1",now:144) == .verified)
+    }
+    @Test func lateFirstFailureRetriesImmediatelyWithoutExtendingProof() {
+        var monitor=EgressMonitor(verifiedAt:100)
+        _=monitor.consume(report(nil,nil,finished:139),expected:"1.1.1.1",now:140)
+        #expect(monitor.nextCheckAt==140)
+        #expect(monitor.lastVerifiedAt==100 && monitor.expired(at:145))
     }
     @Test func tlsDiagnosticKeepsKnownSignalsButNeverRawSecrets() {
         let raw="curl: (35) LibreSSL SSL_connect: SSL_ERROR_SYSCALL connection reset by peer https://user:secret@private.example/token?key=SECRET\nPRIVATE RESPONSE"

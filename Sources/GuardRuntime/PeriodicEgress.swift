@@ -24,6 +24,12 @@ public struct EgressDiagnostic:Codable,Sendable {
     public var proofRemainingSeconds:Double? = nil
 }
 
+enum EgressTiming {
+    static let proofLifetime:TimeInterval = 45
+    static let requestTimeout:TimeInterval = 10
+    static let schedulingMargin:TimeInterval = 2
+}
+
 enum EgressDecision:Equatable {case verified,retry(String),stop(String)}
 /// Only lack of evidence gets a bounded retry, never contradictory evidence.
 struct EgressMonitor {
@@ -31,7 +37,7 @@ struct EgressMonitor {
     private(set) var failures=0
     private(set) var nextCheckAt:Double
     init(verifiedAt:Double){lastVerifiedAt=verifiedAt;nextCheckAt=verifiedAt+15}
-    func expired(at now:Double)->Bool {now<lastVerifiedAt || now-lastVerifiedAt>=45}
+    func expired(at now:Double)->Bool {now<lastVerifiedAt || now-lastVerifiedAt>=EgressTiming.proofLifetime}
     mutating func consume(_ report:EgressReport,expected:String,now:Double)->EgressDecision {
         // Mismatching public IP takes precedence over age: never hide it with a retry.
         if report.samples.contains(where:{$0.ip.map{IPv4.isPublic($0) && $0 != expected} ?? false}) {
@@ -54,7 +60,11 @@ struct EgressMonitor {
             }
         }
         // Spread fast TLS failures; the absolute proof deadline is never extended.
-        failures+=1;nextCheckAt=now+(failures==1 ? 6:10)
+        failures+=1
+        let preferredDelay:TimeInterval=failures==1 ? 6:10
+        let remaining=EgressTiming.proofLifetime-(now-lastVerifiedAt)
+        let availableDelay=max(0,remaining-EgressTiming.requestTimeout-EgressTiming.schedulingMargin)
+        nextCheckAt=now+min(preferredDelay,availableDelay)
         return failures>=3 ? .stop("Periodic egress retry limit: "+reason):.retry(reason)
     }
 }
