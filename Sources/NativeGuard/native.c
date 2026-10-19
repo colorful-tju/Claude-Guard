@@ -22,6 +22,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <limits.h>
+#include <mach/vm_prot.h>
 static int confirmed_inactive(int32_t pid) {
     struct kinfo_proc info={0};size_t size=sizeof(info);
     int mib[]={CTL_KERN,KERN_PROC,KERN_PROC_PID,pid};
@@ -31,6 +32,43 @@ static int confirmed_inactive(int32_t pid) {
     return 0;
 }
 static int confirmed_zombie(int32_t pid) { return confirmed_inactive(pid)==CSG_PROCESS_ZOMBIE; }
+/* A deleted text vnode can fail proc_pidpath while VM retains its kernel path.
+ * Never use argv/ps strings, and never turn a path error into process absence.
+ * Require one unique unlinked executable vnode, a matching kernel process name,
+ * a complete bounded walk, and stable BSD identity before accepting the path. */
+static int deleted_executable_path(int32_t pid,const struct proc_bsdinfo *before,char *path,size_t capacity) {
+    uint64_t address=0,inode=0;uint32_t device=0;int found=0,complete=0;
+    char candidate[4096]={0};
+    for(int i=0;i<1024;i++) {
+        struct proc_regionwithpathinfo region={0};errno=0;
+        int n=proc_pidinfo(pid,PROC_PIDREGIONPATHINFO,address,&region,sizeof(region));
+        if(n!=sizeof(region)){complete=n==0 && errno==EINVAL;break;}
+        const struct vinfo_stat *v=&region.prp_vip.vip_vi.vi_stat;
+        if((region.prp_prinfo.pri_protection&VM_PROT_EXECUTE) &&
+           (v->vst_mode&S_IFMT)==S_IFREG && v->vst_nlink==0) {
+            const char *p=region.prp_vip.vip_path;
+            size_t length=strnlen(p,sizeof(region.prp_vip.vip_path));
+            if(length==0 || length>=sizeof(region.prp_vip.vip_path) || p[0]!='/' || length>=capacity)return 0;
+            if(found && (inode!=v->vst_ino || device!=v->vst_dev || strcmp(candidate,p)))return 0;
+            inode=v->vst_ino;device=v->vst_dev;strlcpy(candidate,p,sizeof(candidate));found=1;
+        }
+        uint64_t start=region.prp_prinfo.pri_address,size=region.prp_prinfo.pri_size;
+        if(!size || start>UINT64_MAX-size || start+size<=address)return 0;
+        address=start+size;
+    }
+    if(!complete || !found)return 0;
+    const char *base=strrchr(candidate,'/');if(!base || !base[1])return 0;base++;
+    const char *name=before->pbi_name[0]?before->pbi_name:before->pbi_comm;
+    size_t limit=before->pbi_name[0]?sizeof(before->pbi_name):sizeof(before->pbi_comm);
+    size_t length=strnlen(name,limit);
+    if(!length || length==limit || strncmp(base,name,length) || (length<limit-1 && base[length]))return 0;
+    struct proc_bsdinfo after={0};
+    if(proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&after,sizeof(after))!=sizeof(after) || after.pbi_status==SZOMB ||
+       after.pbi_pid!=before->pbi_pid || after.pbi_uid!=before->pbi_uid || after.pbi_ppid!=before->pbi_ppid ||
+       after.pbi_start_tvsec!=before->pbi_start_tvsec || after.pbi_start_tvusec!=before->pbi_start_tvusec ||
+       memcmp(after.pbi_name,before->pbi_name,sizeof(after.pbi_name)) || memcmp(after.pbi_comm,before->pbi_comm,sizeof(after.pbi_comm)))return 0;
+    strlcpy(path,candidate,capacity);return 1;
+}
 int csg_process(int32_t pid, CSGProcess *out) {
     memset(out,0,sizeof(*out));
     struct proc_bsdinfo b;
@@ -47,6 +85,7 @@ int csg_process(int32_t pid, CSGProcess *out) {
     if (proc_pidpath(pid,out->path,sizeof(out->path)) <= 0) {
         int error=errno;
         if(error==ESRCH || error==ENOENT) {int inactive=confirmed_inactive(pid);if(inactive) return inactive;}
+        if(error==ENOENT && deleted_executable_path(pid,&b,out->path,sizeof(out->path)))return 0;
         errno=error;return -2;
     }
     return 0;
