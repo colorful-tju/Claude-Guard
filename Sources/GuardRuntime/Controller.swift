@@ -14,6 +14,7 @@ public final class Controller: @unchecked Sendable {
     private var ipv6RecoveryCount=0
     private var lastRecoveryCheck:UInt64?
     private var lastSocketObservation:UInt64?
+    private var inventoryReview=InventoryReview()
     private var blockedStatistics:BlockedPacketStatistics?
     private var latestLabels=""
     private var heartbeatWasDelayed=false
@@ -107,6 +108,7 @@ public final class Controller: @unchecked Sendable {
     }
     private func persist() throws {if let journal{try storage.writeJournal(journal)}}
     public func inspect() throws {
+        guard journal == nil else{return} // Active UI requests only read the last monitor result.
         let n=try inspector.node();status.gateway="\(n.server):\(n.port)";status.fingerprint=n.fingerprint
         let inventory=effects.inventory()
         try status.applyPreview(inventory,uid:installation.uid,allowPartial:journal == nil || status.phase=="recoveryBlocked",known:previousHealthy?.claudeProcesses ?? [],corePath:installation.registeredCorePath)
@@ -118,7 +120,7 @@ public final class Controller: @unchecked Sendable {
         s.configurationFingerprint=evidence.node.fingerprint;s.nodeName=evidence.node.name;s.gateway=evidence.node.server;s.gatewayPort=evidence.node.port;s.protocolName=evidence.node.type
         s.flclashRunning=true;s.coreIdentityVerified=true;s.verifiedTun=evidence.network.tun;s.tunRuntimeVerified=true
         s.pfEnabled=view.enabled;s.mainRulesFingerprint=hash(Data(view.main.utf8));s.pfEnvironmentCompatible=true
-        s.processInventoryComplete=true;s.claudeProcesses=evidence.claude;s.stateInventoryComplete=true;s.states=view.states;s.ipv6Routable=evidence.network.ipv6Routable
+        s.processInventoryComplete=evidence.inventory.complete;s.claudeProcesses=evidence.claude;s.stateInventoryComplete=true;s.states=view.states;s.ipv6Routable=evidence.network.ipv6Routable
         if let journal,let token=journal.token {
             if view.canonical != journal.expectedCanonicalRules {
                 self.journal!.cleanRuleHistory=false;try persist()
@@ -133,7 +135,7 @@ public final class Controller: @unchecked Sendable {
     }
     public func begin(_ settings:Settings,launch:Bool) throws {
         guard journal==nil,status.phase=="off" else{throw fail("Stop or recover the previous session first")}
-        self.settings=settings;egressMonitor=nil;status.periodicEgress=nil;status.egressWarning=nil;status.egressRechecking=false;blockedStatistics=nil;status.blockedPackets=nil;status.blockedPacketsAt=nil;status.blockedPacketsIssue=nil;launched=false;heartbeatWasDelayed=false;lastMonitorAt=nil;lastMonitorInterval=nil;status.heartbeatDiagnostic=nil;logHealthy=true;status.verified=false;status.phase="checking"
+        self.settings=settings;inventoryReview=InventoryReview();egressMonitor=nil;status.periodicEgress=nil;status.egressWarning=nil;status.egressRechecking=false;blockedStatistics=nil;status.blockedPackets=nil;status.blockedPacketsAt=nil;status.blockedPacketsIssue=nil;launched=false;heartbeatWasDelayed=false;lastMonitorAt=nil;lastMonitorInterval=nil;status.heartbeatDiagnostic=nil;logHealthy=true;status.verified=false;status.phase="checking"
         do {
             try effects.ipv6?.verifyStable()
             recoveryAttempts=0;lastRecoveryCheck=nil
@@ -196,6 +198,7 @@ public final class Controller: @unchecked Sendable {
             updateBlockStatistics();baseline=final
             baselineRoutes=finalEvidence.routeDetail;previousHealthy=final;previousRoutes=finalEvidence.routeDetail
             previousHealthyAt=ISO8601DateFormatter().string(from:Date())
+            status.processInventoryComplete=final.processInventoryComplete;status.claudeKnown=true;status.claude = !final.claudeProcesses.isEmpty
             journal!.stage="armed";try persist();status.phase="armed";status.verified=true;status.udp="ON（实包及计数已验证）";status.monitor="PF 防护运行；socket 仅诊断，不凭创建连接判泄漏";lastSocketObservation=nil
             status.gateway="\(policy.endpoint.gateway):\(policy.endpoint.port)";status.egress=policy.endpoint.expectedEgress;status.physical=policy.physical.name;status.tun=policy.tun.name
             status.ipv6="无默认路由；未完成 IPv6 实包验证";status.country="地区未核验；仅验证预期 IPv4";status.flclash=true
@@ -265,7 +268,7 @@ public final class Controller: @unchecked Sendable {
             try requireActive()
             try requireEgressMonitor()
             stage="runtimeCollection"
-            let evidence=try inspector.runtime(settings:settings);observedRoutes=evidence.routeDetail
+            let evidence=try inspector.monitoringRuntime(settings:settings);observedRoutes=evidence.routeDetail
             if !evidence.processObservation.isEmpty {log("process identity recheck: \(evidence.processObservation)")}
             stage="pfSnapshot"
             let current=try snapshot(evidence,policy:policy);observed=current
@@ -273,15 +276,16 @@ public final class Controller: @unchecked Sendable {
             stage="premisesComparison"
             let compared=MonitoringRouteEvidence.revalidated(current,baseline:baseline,currentRoutes:evidence.routeDetail,baselineRoutes:baselineRoutes,policy:policy)
             acceptedRouteEquivalence=compared.routeFingerprint != current.routeFingerprint
-            try MonitoringGate.validate(compared,baseline:baseline,policy:policy)
+            try validateMonitoring(compared,baseline:baseline,policy:policy)
             if current.epoch != (previousHealthy?.epoch ?? baseline.epoch) {
                 log("route notification revalidated epoch=\(previousHealthy?.epoch ?? baseline.epoch)->\(current.epoch); interface lifetimes, protected paths and PF unchanged")
             }
             if acceptedRouteEquivalence,previousHealthy?.routeFingerprint != current.routeFingerprint {
                 log("monitor route equivalent session=\(policy.sessionID) target=1.1.1.1 tun=\(policy.tun.name) gateway=\(policy.tun.ipv4) baseline=\(baseline.routeFingerprint) current=\(current.routeFingerprint)")
             }
-            status.claude = !current.claudeProcesses.isEmpty
-            if launched && !status.claude {try stop(reason:"Claude 已退出",restoreIPv6:false);return}
+            try requireEpoch(current.epoch)
+            try reviewInventory(evidence.inventory)
+            if launched && evidence.inventory.complete && !status.claude {try stop(reason:"Claude 已退出",restoreIPv6:false);return}
             // Passive collection is diagnostic, not a leakage verdict. The PF/runtime gate
             // above remains mandatory even when socket descriptors disappear mid-read.
             if lastSocketObservation==nil || seconds()-lastSocketObservation!>=5 {
@@ -318,11 +322,34 @@ public final class Controller: @unchecked Sendable {
             }
             stage="finalLivenessAndEpoch";try requireActive();try requireEpoch(current.epoch)
             updateBlockStatistics();updateHeartbeatDiagnostic()
+            status.refreshedAt=ISO8601DateFormatter().string(from:Date())
             previousHealthy=current;previousRoutes=evidence.routeDetail
             previousHealthyAt=ISO8601DateFormatter().string(from:Date())
         }catch {
             recordMonitoringFailure(policy:policy,baseline:baseline,stage:stage,reason:String(describing:error),current:observed,routes:observedRoutes,acceptedRouteEquivalence:acceptedRouteEquivalence)
         }
+    }
+    private func validateMonitoring(_ current:LocalSnapshot,baseline:LocalSnapshot,policy:GuardPolicy) throws {
+        if current.processInventoryComplete {try MonitoringGate.validate(current,baseline:baseline,policy:policy)}
+        else {try MonitoringGate.validateDegraded(current,baseline:baseline,policy:policy)}
+    }
+    private func reviewInventory(_ inventory:ProcessInventory) throws {
+        let present = !NativeProcesses.claude(inventory.records,uid:installation.uid,known:previousHealthy?.claudeProcesses ?? []).isEmpty
+        status.claudeKnown=inventory.complete || present
+        if status.claudeKnown == true {status.claude=present}
+        status.processInventoryComplete=inventory.complete
+        status.processWarning=inventory.issues.prefix(8).joined(separator:"; ")
+        let outcome=inventoryReview.observe(inventory,now:effects.clock.sample().uptime,
+                                            tracked:previousHealthy?.claudeProcesses ?? [])
+        if let event=outcome.event {
+            log("inventory-review " + event)
+            var record=try JSONDecoder().decode(InventoryDiagnostic.self,from:Data(event.utf8))
+            record.sessionID=journal?.policy.sessionID.uuidString
+            record.capturedAt=ISO8601DateFormatter().string(from:Date())
+            try storage.writeInventoryDiagnostic(String(decoding:JSONEncoder().encode(record),as:UTF8.self))
+        }
+        if outcome.expired {throw IncompleteProcessInventory(failures:inventory.failures,
+            issues:["持续至少 5 秒无法核验进程清单"]+inventory.issues)}
     }
     private func requireEgressMonitor() throws {
         let now=effects.clock.sample().uptime
@@ -338,11 +365,12 @@ public final class Controller: @unchecked Sendable {
             // Recollect local evidence instead of trusting the old epoch or the echo alone.
             if try inspector.epoch() != (previousHealthy?.epoch ?? baseline.epoch) {
                 guard let settings else{throw fail("Runtime settings unavailable")}
-                let evidence=try inspector.runtime(settings:settings);routes=evidence.routeDetail
+                let evidence=try inspector.monitoringRuntime(settings:settings);routes=evidence.routeDetail
                 let current=try snapshot(evidence,policy:policy);observed=current
                 let compared=MonitoringRouteEvidence.revalidated(current,baseline:baseline,currentRoutes:evidence.routeDetail,baselineRoutes:baselineRoutes,policy:policy)
-                try MonitoringGate.validate(compared,baseline:baseline,policy:policy)
+                try validateMonitoring(compared,baseline:baseline,policy:policy)
                 try requireActive();try requireEpoch(current.epoch)
+                try reviewInventory(evidence.inventory)
                 log("route notification revalidated before egress result epoch=\(current.epoch); local protection verified")
                 previousHealthy=current;previousRoutes=evidence.routeDetail
                 previousHealthyAt=ISO8601DateFormatter().string(from:Date())
@@ -531,6 +559,7 @@ public final class Controller: @unchecked Sendable {
         do {
             switch request.operation {
             case .status:
+                if journal != nil {return .init(ok:true,status:status)}
                 let inventory=effects.inventory()
                 try status.applyPreview(inventory,uid:installation.uid,allowPartial:journal == nil || status.phase=="recoveryBlocked",known:previousHealthy?.claudeProcesses ?? [],corePath:installation.registeredCorePath)
             case .heartbeat:heartbeat()
@@ -553,11 +582,6 @@ public final class Controller: @unchecked Sendable {
             return .init(ok:true,status:status)
         }catch{
             let original=String(describing:error)
-            if journal != nil,[GuardOperation.status,.inspect].contains(request.operation) {
-                // A failed live observation is a safety failure, not a partial idle preview.
-                status.verified=false
-                stopForIncident(reason:"Active observation failed: \(original)",hadClaude:launched || status.claude)
-            }
             return .init(ok:false,status:status,error:original)
         }
     }

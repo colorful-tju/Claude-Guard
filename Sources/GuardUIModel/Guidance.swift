@@ -49,6 +49,9 @@ public struct Guidance:Equatable {
         if raw.contains("deadline") || raw.contains("timeout") {
             return .init("检测异常","检测步骤超时，尚未完成验证","先点离线自检；再次失败时导出反馈，不要连续重试启动。",severe:true)
         }
+        if raw.contains("持续至少 5 秒无法核验进程清单") {
+            return .init("进程复核超时","进程信息连续 5 秒未能完整确认，已保守停止","这不是泄漏判定。请导出反馈查看失败 PID 和复核记录；恢复受阻时先使用恢复工具。")
+        }
         if raw.contains("inventory") || raw.contains("identity unreadable") {
             return .init("检测异常","进程信息未能完整读取","稍后重新检测配置；反复出现请导出反馈。",severe:true)
         }
@@ -61,6 +64,7 @@ public struct Guidance:Equatable {
         if state.phase=="recoveryBlocked" {return .init("需要处理","恢复受阻：Claude 退出或网络恢复尚未确认","先点击「关闭防护」；无效时按手册执行独立恢复。",severe:true)}
         if busy {return .init("正在执行","正在执行指令，请稍候","下方持续显示实际阶段；需要取消时点击「关闭防护」。")}
         if !failure.isEmpty {return reason(failure)}
+        if state.phase=="armed" && !state.processInventoryComplete {return .init("正在复核","进程信息暂未完整读取，PF 防护仍运行","自动复核中；持续 5 秒无法确认时将保守停止 Claude。此提示不代表 IP 泄漏。")}
         if state.verified && state.phase=="armed" {return .init("防护运行","防护已验证，持续监控中","保持 已登记代理 与启动器运行；结束使用后点击「关闭防护」。")}
         if let event=state.interruption,state.lastRisk==event.reason {
             let detail=reason(event.reason)

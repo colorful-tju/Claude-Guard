@@ -34,6 +34,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     var afterStage:((String)->Void)?
     var busyWorkers=false,uiPresent=true
     var claude:[ProcessRecord]=[]
+    var inventoryIssues:[String]=[]
     var socketRows:[CSGSocket]=[]
     let privateFiles:PrivateControllerStorage
     let installation=Installation(uid:501,home:"/nonexistent",clients:[],coreHash:"core",flclashHash:"flclash",claudeHash:"claude")
@@ -48,7 +49,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     func makeController() throws -> Controller {
         let effects=ControllerEffects(commands:Commands(),pf:self,inspector:self,storage:self,clock:clock,
             uiIdentity:{pid in .init(pid:pid,startTime:1,executableIdentity:"ui")},uiAlive:{[self] _ in uiPresent},
-            inventory:{[self] in .init(records:claude,issues:[])},
+            inventory:{[self] in .init(records:claude,issues:inventoryIssues)},
             terminateClaude:{[self] in try step("terminate");claude=[]},observeSockets:{[self] policy,_ in try step("sockets");return SocketObservationReport.collect(policy:policy,processes:claude.map(\.identity),readProcess:{pid in try #require(self.claude.first{$0.pid==pid})},readSockets:{_ in self.socketRows})},
             preflightWorker:{[self] _,_ in try step("worker-preflight");return "test-worker"},verifyClaude:{[self] in try step("verify-app");beforeVerify?()},
             launchClaude:{[self] cancelled in try step("launch");if cancelled(){throw fail("cancelled launch")};launches += 1;onLaunch?()},
@@ -67,7 +68,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
         let core=ProcessIdentity(pid:2345,startTime:100,executableIdentity:"core")
         let physical=InterfaceIdentity(name:"en0",index:6,generation:identityGeneration,ipv4:"172.21.191.84")
         let tun=InterfaceIdentity(name:"utun4",index:20,generation:identityGeneration,ipv4:"198.18.0.1")
-        return .init(node:try node(),core:core,connection:.init(owner:core,gateway:"23.20.10.8",port:5376,localAddress:physical.ipv4,localPort:localPort,established:true),network:.init(interfaces:[physical,tun],detail:"interfaces",physical:physical,tun:tun,ipv6Routable:false),routeFingerprint:routeFingerprint,routeDetail:routeDetail,epoch:epochValue,claude:claude.map(\.identity))
+        return .init(node:try node(),core:core,connection:.init(owner:core,gateway:"23.20.10.8",port:5376,localAddress:physical.ipv4,localPort:localPort,established:true),network:.init(interfaces:[physical,tun],detail:"interfaces",physical:physical,tun:tun,ipv6Routable:false),inventory:.init(records:claude,issues:inventoryIssues),routeFingerprint:routeFingerprint,routeDetail:routeDetail,epoch:epochValue,claude:claude.map(\.identity))
     }
     func epoch() throws -> UInt64 {try step("epoch");return epochValue}
     func exists(_ name:String)->Bool {privateFiles.exists(name)}
@@ -76,6 +77,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     func remove(_ name:String) throws {try step("remove:"+name);try privateFiles.remove(name)}
     func appendEvent(_ data:Data) throws {try step("log");try privateFiles.appendEvent(data)}
     func writeDiagnostic(_ value:ValidationDiagnostics) throws {try step("diagnostic");try privateFiles.writeDiagnostic(value);beforeDiagnostic?()}
+    func writeInventoryDiagnostic(_ json:String) throws {try privateFiles.writeInventoryDiagnostic(json)}
     func writeSocketDiagnostic(_ report:SocketObservationReport) throws {try step("socket-diagnostic");try privateFiles.writeSocketDiagnostic(report)}
     func writeMonitoringDiagnostic(_ value:MonitoringDiagnostics) throws {try step("monitor-diagnostic");try privateFiles.writeMonitoringDiagnostic(value)}
     func environment() throws -> (String,String,Bool) {try step("environment");return("main","",enabled)}
@@ -99,6 +101,48 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
 }
 
 struct ControllerLifecycleTests {
+    @Test func statusDoesNotCollectOrStopActiveSession() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
+        f.inventoryIssues=["unrelated pid transient"]
+        let reply=c.handle(.init(.status))
+        #expect(reply.ok && c.status.phase=="armed" && c.status.verified)
+        #expect(!f.calls.contains("terminate"))
+    }
+    @Test func incompleteMonitorRecoversWithoutStopButTimeoutStops() throws {
+        for recover in [true,false] {
+            let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
+            f.inventoryIssues=["unrelated pid transient"];c.tick()
+            #expect(c.status.phase=="armed" && !c.status.processInventoryComplete)
+            f.clock.advance(recover ? 4:5);c.heartbeat()
+            if recover {f.inventoryIssues=[]}
+            c.tick()
+            #expect(c.status.phase==(recover ? "armed":"recoveryBlocked"))
+            #expect(c.status.report.contains(recover ? "recovered":"持续至少 5 秒"))
+        }
+    }
+    @Test func partialInventoryDoesNotMaskBrokenPFOrInterface() throws {
+        for change in ["pf","interface","heartbeat","sleep"] {
+            let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
+            f.inventoryIssues=["transient"];c.tick()
+            if change=="pf" {f.reference=false}
+            else if change=="interface" {f.identityGeneration += 1}
+            else if change=="heartbeat" {f.clock.advance(31)}
+            else {f.clock.advance(0,sleep:1)}
+            c.tick()
+            #expect(c.status.phase != "armed")
+            #expect(f.calls.contains("terminate"))
+        }
+    }
+    @Test func partialScanCannotClaimClaudeExitedOrAuthorizeStart() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        f.inventoryIssues=["transient"]
+        reject{try c.begin(f.settings,launch:true)}
+        #expect(f.launches==0)
+        f.inventoryIssues=[];c.heartbeat();try c.begin(f.settings,launch:true)
+        f.inventoryIssues=["transient"];c.tick()
+        #expect(c.status.phase=="armed" && c.status.claudeKnown==false)
+    }
+
     @Test func ordinaryEpochAtPFInstallationStillGetsCompleteProbes() throws {
         let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
         f.afterStage={if $0=="protected" {f.epochValue += 1}}

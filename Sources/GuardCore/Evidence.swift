@@ -181,6 +181,12 @@ public struct ValidationBundle: Sendable, Codable {
 
 public enum SafetyGate {
     public static func validatePreflight(_ s: LocalSnapshot, policy p: GuardPolicy) throws {
+        guard s.processInventoryComplete, s.claudeProcesses.isEmpty else {
+            throw GuardFailure.rejected("Incomplete runtime node, process, interface or TUN evidence")
+        }
+        try validateRuntimePaths(s,policy:p)
+    }
+    private static func validateRuntimePaths(_ s: LocalSnapshot, policy p: GuardPolicy) throws {
         guard s.interfaces.contains(p.physical), s.interfaces.contains(p.tun),
               Set(s.interfaces.map(\.name)).count == s.interfaces.count,
               Set(s.interfaces.map(\.index)).count == s.interfaces.count,
@@ -194,7 +200,7 @@ public enum SafetyGate {
               s.connection.gateway == p.endpoint.gateway, s.connection.port == p.endpoint.port,
               s.connection.localAddress == p.physical.ipv4, s.connection.localPort > 0,
               s.verifiedTun == p.tun, s.tunRuntimeVerified,
-              s.processInventoryComplete, s.claudeProcesses.isEmpty, s.stateInventoryComplete else {
+              s.stateInventoryComplete else {
             throw GuardFailure.rejected("Incomplete runtime node, process, interface or TUN evidence")
         }
         guard !s.mainRulesFingerprint.isEmpty, s.pfEnvironmentCompatible else {
@@ -204,6 +210,10 @@ public enum SafetyGate {
     }
     public static func validateLocal(_ s: LocalSnapshot, policy p: GuardPolicy) throws {
         try validatePreflight(s, policy: p)
+        try validateProtection(s,policy:p)
+    }
+    public static func validateProtection(_ s:LocalSnapshot,policy p:GuardPolicy) throws {
+        try validateRuntimePaths(s,policy:p)
         guard s.pfEnabled, !s.ownReference.isEmpty, s.rulesFingerprint == p.rulesFingerprint,
               !s.mainRulesFingerprint.isEmpty, s.pfEnvironmentCompatible,
               s.rulesAreStateless, s.anchorReachable else {
@@ -242,9 +252,17 @@ public enum SafetyGate {
 
 public enum MonitoringGate {
     public static func validate(_ current:LocalSnapshot,baseline:LocalSnapshot,policy:GuardPolicy) throws {
-        // Runtime monitoring permits Claude to exist; this copy asserts only the network premises.
-        var network=current;network.claudeProcesses=[]
-        try SafetyGate.validateLocal(network,policy:policy)
+        guard current.processInventoryComplete else{throw GuardFailure.rejected("Complete monitoring inventory required; use explicit degraded gate")}
+        try validateProtection(current,baseline:baseline,policy:policy)
+    }
+    /// Only the controller's bounded review window may call this with truthful incomplete evidence.
+    public static func validateDegraded(_ current:LocalSnapshot,baseline:LocalSnapshot,policy:GuardPolicy) throws {
+        guard !current.processInventoryComplete else{throw GuardFailure.rejected("Degraded gate requires incomplete inventory")}
+        try validateProtection(current,baseline:baseline,policy:policy)
+    }
+    private static func validateProtection(_ current:LocalSnapshot,baseline:LocalSnapshot,policy:GuardPolicy) throws {
+        // Process completeness belongs to lifecycle gates. Controller bounds degraded observation.
+        try SafetyGate.validateProtection(current,policy:policy)
         guard Set(current.states.map(\.id)).isSubset(of:Set(baseline.states.map(\.id))) else{throw GuardFailure.rejected("New state appeared during stateless monitoring")}
         let fields=changedPremises(current,baseline:baseline)
         guard fields.isEmpty else{throw GuardFailure.rejected("Protected runtime premises changed: "+fields.joined(separator:","))}
@@ -255,7 +273,7 @@ public enum MonitoringGate {
         // A fresh established socket owned by the SAME verified Core and endpoint is expected HTTP behavior.
         // Startup's final snapshot comparison remains exact and does not permit this renewal.
         expected.connection.localPort=current.connection.localPort
-        var fields=expected.differingFields(from:current)
+        var fields=expected.differingFields(from:current).filter{$0 != "processInventoryComplete"}
         if !Set(current.states.map(\.id)).isSubset(of:Set(baseline.states.map(\.id))) {fields.append("states")}
         return fields
     }

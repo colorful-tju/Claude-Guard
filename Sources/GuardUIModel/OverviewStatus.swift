@@ -5,7 +5,7 @@ public enum BannerTone {case protected,waiting,blocked}
 extension AppModel {
     public var bannerTone:BannerTone {
         if !failure.isEmpty || state.phase=="recoveryBlocked" || interruptionAlert != nil {return .blocked}
-        if !communicationWarning.isEmpty || (state.phase=="armed" && (state.heartbeatDiagnostic?.delayed==true || state.egressRechecking==true)) {return .waiting}
+        if !communicationWarning.isEmpty || (state.phase=="armed" && (state.heartbeatDiagnostic?.delayed==true || state.egressRechecking==true || !state.processInventoryComplete)) {return .waiting}
         if state.phase=="armed" && state.verified {return .protected}
         if needsIPv6Off || guidance.severe || guidance.category=="IP 未匹配" {return .blocked}
         return .waiting
@@ -16,6 +16,7 @@ extension AppModel {
         case .waiting:
             if !communicationWarning.isEmpty {return "助手状态响应延迟，正在重试"}
             if state.phase=="armed" && state.egressRechecking==true {return "出口待核验，PF 防护保持运行"}
+            if state.phase=="armed" && !state.processInventoryComplete {return "进程信息复核中，PF 防护保持运行"}
             if state.phase=="armed" {return "控制界面响应延迟，防护仍在运行"}
             return busy ? "正在验证，请稍候":"尚未启动防护，等待运行"
         case .blocked:return guidance.title

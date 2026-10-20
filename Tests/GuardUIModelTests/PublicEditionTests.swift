@@ -4,11 +4,18 @@ import GuardRuntime
 @testable import GuardUIModel
 
 struct PublicEditionTests {
+    @Test @MainActor func processReviewIsYellowWithoutClaimingPFStopped() {
+        let m=AppModel(autoPoll:false,preferences:nil)
+        m.state.phase="armed";m.state.verified=true;m.state.processInventoryComplete=false
+        #expect(m.bannerTone == .waiting && m.bannerTitle.contains("进程信息复核"))
+        #expect(m.state.verified)
+    }
+
     @Test @MainActor func freshInstallContainsNoPersonalEndpoint() {
         let m=AppModel(autoPoll:false,preferences:nil)
         #expect(m.settings.gateway.isEmpty && m.settings.expectedEgress.isEmpty && m.settings.port==0)
         #expect(m.bannerTone == .waiting)
-        m.state.phase="armed";m.state.verified=false
+        m.state.phase="armed";m.state.processInventoryComplete=true;m.state.verified=false
         #expect(m.bannerTone != .protected)
         m.state.verified=true
         #expect(m.bannerTone == .protected)

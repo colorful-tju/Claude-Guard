@@ -5,6 +5,7 @@ import NativeGuard
 import Security
 public struct RuntimeEvidence:Sendable {
     public var node:NodeConfiguration;public var core:ProcessIdentity;public var connection:CoreConnection;public var network:NetworkView
+    public var inventory:ProcessInventory = .init(records:[],issues:[])
     public var processObservation:String=""
     public var routeFingerprint:String;public var routeDetail:String;public var epoch:UInt64;public var claude:[ProcessIdentity]
 }
@@ -18,12 +19,18 @@ public final class Inspector: @unchecked Sendable {
         let result=try commands.checked("/usr/bin/ruby",[Paths.root+"/read-node.rb",file])
         return try NodeConfiguration.parse(Data(result.utf8))
     }
-    public func runtime(settings:Settings) throws -> RuntimeEvidence {
+    public func runtime(settings:Settings) throws -> RuntimeEvidence {try collect(settings:settings,monitoring:false)}
+    public func monitoringRuntime(settings:Settings) throws -> RuntimeEvidence {try collect(settings:settings,monitoring:true)}
+    private func collect(settings:Settings,monitoring:Bool) throws -> RuntimeEvidence {
         let before=try events.epoch();let node=try node()
         guard settings.providerConfirmed,node.server==settings.gateway,node.port==settings.port,
               node.fingerprint==settings.confirmationFingerprint else{throw fail("Provider endpoint confirmation does not match current config fingerprint")}
-        let inventory=NativeProcesses.inventory();let processes=try inventory.requireComplete()
-        trackedClaude=NativeProcesses.claude(processes,uid:installation.uid,known:trackedClaude).map(\.identity)
+        let inventory=NativeProcesses.inventory()
+        let processes=monitoring ? inventory.records : try inventory.requireComplete()
+        let observedClaude=NativeProcesses.claude(processes,uid:installation.uid,known:trackedClaude).map(\.identity)
+        // Never discard descendants solely because a partial scan could not read them.
+        if inventory.complete {trackedClaude=observedClaude}
+        else {trackedClaude=Array(Set(trackedClaude+observedClaude))}
         let cores=processes.filter{$0.path==installation.registeredCorePath && ($0.uid==0 || $0.uid==installation.uid)}
         guard cores.count==1,let core=cores.first else{throw fail("Unique registered proxy Core not found; prepare the registered proxy manually")}
         try verifyProcess(core,expectedHash:installation.coreHash)
@@ -53,7 +60,7 @@ public final class Inspector: @unchecked Sendable {
         let after=try events.epoch()
         guard after==before else{throw fail("Runtime changed while collecting evidence: epoch \(before)->\(after), interfaceGeneration=\(network.physical.generation)->\(try events.interfaceGeneration())")}
         let detail=network.detail+"\nordinary-gateway-route\n"+(try RouteEvidence.canonical(ordinaryRoute))+"\nphysical-scoped-gateway-route\n"+(try RouteEvidence.canonical(physicalRoute))
-        return .init(node:node,core:identity,connection:connection,network:network,processObservation:inventory.rechecked>0 ? "rechecked=\(inventory.rechecked) recovered=\(inventory.recovered)":"",routeFingerprint:hash(Data(detail.utf8)),routeDetail:detail,epoch:before,claude:trackedClaude)
+        return .init(node:node,core:identity,connection:connection,network:network,inventory:inventory,processObservation:inventory.rechecked>0 ? "rechecked=\(inventory.rechecked) recovered=\(inventory.recovered)":"",routeFingerprint:hash(Data(detail.utf8)),routeDetail:detail,epoch:before,claude:trackedClaude)
     }
     private func verifyProcess(_ r:ProcessRecord,expectedHash:String) throws {
         var guest:SecCode?

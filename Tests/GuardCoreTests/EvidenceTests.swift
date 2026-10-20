@@ -241,3 +241,23 @@ struct MonitoringReportTests {
         #expect(!report.currentComplete && report.current==nil)
     }
 }
+
+struct LifecycleGateSeparationTests {
+    @Test func degradedMonitoringKeepsEveryProtectionGateAndDoesNotMutateEvidence() throws {
+        let p=try fixturePolicy(),base=fixtureSnapshot(p)
+        var current=base;current.processInventoryComplete=false
+        try MonitoringGate.validateDegraded(current,baseline:base,policy:p)
+        #expect(!current.processInventoryComplete)
+        expectThrows(try MonitoringGate.validate(current,baseline:base,policy:p))
+        expectThrows(try SafetyGate.validatePreflight(current,policy:p))
+        expectThrows(try SafetyGate.validateLocal(current,policy:p))
+        let failures:[(inout LocalSnapshot)->Void]=[
+            {$0.pfEnabled=false},{$0.ownReference=""},{$0.rulesFingerprint="wrong"},
+            {$0.stateInventoryComplete=false},{$0.coreIdentityVerified=false},
+            {$0.tunRuntimeVerified=false},{$0.routeFingerprint="wrong"},{$0.epoch += 1},
+            {$0.rulesAreStateless=false},{$0.anchorReachable=false},{$0.pfEnvironmentCompatible=false},
+            {$0.states=[gatewayState(p)]},{$0.connection.established=false},{$0.interfaces=[]}
+        ]
+        for change in failures {var bad=current;change(&bad);expectThrows(try MonitoringGate.validateDegraded(bad,baseline:base,policy:p))}
+    }
+}

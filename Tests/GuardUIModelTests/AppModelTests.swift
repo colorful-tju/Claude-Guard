@@ -136,7 +136,7 @@ struct HeartbeatTransientFailureTests {
     @Test @MainActor func heartbeatOrStatusTimeoutDoesNotSendSpeculativeOFF() async throws {
         let t=UITransport();t.failAll=true
         let m=AppModel(autoPoll:false,preferences:nil,transport:t.call)
-        m.state.phase="armed";m.state.verified=true;m.poll()
+        m.state.phase="armed";m.state.processInventoryComplete=true;m.state.verified=true;m.poll()
         for _ in 0..<200 where m.communicationWarning.isEmpty {try await Task.sleep(for:.milliseconds(5))}
         #expect(!m.communicationWarning.isEmpty && !m.state.verified)
         #expect(!t.snapshot().contains(.stop))
@@ -144,7 +144,7 @@ struct HeartbeatTransientFailureTests {
     }
     @Test @MainActor func heartbeatWarningAndStatisticsHaveExplicitScope() {
         let m=AppModel(autoPoll:false,preferences:nil)
-        m.state.phase="armed";m.state.verified=true
+        m.state.phase="armed";m.state.processInventoryComplete=true;m.state.verified=true
         m.state.heartbeatDiagnostic = .init(ageSeconds:10,maxGapSeconds:10,limitSeconds:30)
         #expect(m.bannerTone == .waiting && m.bannerTitle.contains("响应延迟"))
         #expect(m.blockCountText=="—")

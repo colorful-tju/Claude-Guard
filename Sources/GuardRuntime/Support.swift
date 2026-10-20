@@ -36,7 +36,7 @@ public struct ProcessRecord: Sendable {
     public var identity:ProcessIdentity { .init(pid:pid,startTime:started,executableIdentity:path) }
 }
 public enum NativeProcesses {
-    private struct ReadFailure:Error,CustomStringConvertible {
+    struct ReadFailure:Error,CustomStringConvertible {
         var pid:Int32;var result:Int32;var nativeError:Int32
         var description:String {"Process identity unreadable: pid=\(pid) stage=\(result == -1 ? "bsd" : (result == CSG_PROCESS_ZOMBIE ? "confirmed-zombie" : (result == CSG_PROCESS_GONE ? "confirmed-absent":"path"))) rc=\(result) errno=\(nativeError)"}
     }

@@ -50,6 +50,7 @@ public struct Status:Codable,Sendable {
     public var country:String="未核验",ipv6:String="未核验",udp:String="OFF",monitor:String="未启动（有限观测）"
     public var flclash:Bool=false,claude:Bool=false,verified:Bool=false
     public var fingerprint:String="",report:String="",refreshedAt:String=""
+    public var claudeKnown:Bool?
     public var processInventoryComplete:Bool=false,processWarning:String=""
     public var ipv6Override:String="未临时修改"
     public var daemonBuildID:String=BuildIdentity.buildID,workerBuildID:String=""

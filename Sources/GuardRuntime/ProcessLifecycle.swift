@@ -26,7 +26,13 @@ enum ProcessInventoryCollector {
         }
         let issues=pending.keys.sorted().prefix(8).map{"pid=\($0) after bounded identity recheck: \(pending[$0]!)"}
             + (pending.count>8 ? ["Additional unreadable identities: \(pending.count-8)"]:[])
-        return .init(records:rows,issues:issues,rechecked:rechecked,recovered:initial-pending.count)
+        let failures=pending.keys.sorted().prefix(64).map { pid -> FailedIdentity in
+            if let e=pending[pid] as? NativeProcesses.ReadFailure {
+                return .init(pid:pid,stage:e.result == -1 ? "bsd":"path",rc:e.result,errnoCode:e.nativeError)
+            }
+            return .init(pid:pid,stage:"unknown",rc:nil,errnoCode:nil)
+        }
+        return .init(records:rows,issues:issues,rechecked:rechecked,recovered:initial-pending.count,failures:failures)
     }
 }
 

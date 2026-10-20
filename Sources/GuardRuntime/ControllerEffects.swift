@@ -20,10 +20,13 @@ public protocol PacketFiltering: Sendable {
 public protocol RuntimeInspecting: Sendable {
     func node() throws -> NodeConfiguration
     func runtime(settings:Settings) throws -> RuntimeEvidence
+    func monitoringRuntime(settings:Settings) throws -> RuntimeEvidence
     func epoch() throws -> UInt64
     func networkEventDiagnostics() -> [String]
 }
-extension RuntimeInspecting {public func networkEventDiagnostics()->[String] {[]}}
+extension RuntimeInspecting {
+    public func monitoringRuntime(settings:Settings) throws -> RuntimeEvidence {try runtime(settings:settings)}
+    public func networkEventDiagnostics()->[String] {[]}}
 extension Inspector: RuntimeInspecting {
     public func networkEventDiagnostics()->[String] {events.diagnostics()}
     public func epoch() throws -> UInt64 { try events.epoch() }
@@ -38,6 +41,7 @@ public protocol ControllerStorage: Sendable {
     func appendEvent(_ data:Data) throws
     func writeDiagnostic(_ value:ValidationDiagnostics) throws
     func writeMonitoringDiagnostic(_ value:MonitoringDiagnostics) throws
+    func writeInventoryDiagnostic(_ json:String) throws
     func writeSocketDiagnostic(_ report:SocketObservationReport) throws
 }
 public struct PrivateControllerStorage: ControllerStorage {
@@ -55,6 +59,11 @@ public struct PrivateControllerStorage: ControllerStorage {
     }
     public func appendEvent(_ data:Data) throws {try PrivateFiles.append(data,to:root+"/events.log",owner:owner)}
     public func writeDiagnostic(_ value:ValidationDiagnostics) throws {try PrivateFiles.write(value,to:root+"/last-validation.json")}
+    public func writeInventoryDiagnostic(_ json:String) throws {
+        guard json.utf8.count<=65536 else{throw fail("Inventory diagnostic exceeds size bound")}
+        let object=try JSONDecoder().decode(InventoryDiagnostic.self,from:Data(json.utf8))
+        try PrivateFiles.write(object,to:root+"/last-monitoring-degradation.json")
+    }
     public func writeSocketDiagnostic(_ report:SocketObservationReport) throws {
         guard try JSONEncoder().encode(report).count<=65536 else{throw fail("Socket diagnostic exceeds size bound")}
         try PrivateFiles.write(report,to:root+"/last-socket-observation.json")

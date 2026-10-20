@@ -190,7 +190,7 @@ private struct LauncherView:View {
                 Image(systemName:model.bannerTone == .protected ? "checkmark.shield.fill":model.bannerTone == .blocked ? "exclamationmark.shield.fill":"shield.lefthalf.filled").font(.system(size:30)).foregroundStyle(bannerColor)
                 VStack(alignment:.leading,spacing:3) {
                     Text(model.bannerTitle).font(.system(size:20,weight:.bold)).lineLimit(1).help(model.bannerTitle)
-                    Text(model.bannerTone == .protected ? "出口与防护验证通过 · Claude：\(model.state.claude ? "运行中":"未运行")":model.guidance.action).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(model.guidance.action)
+                    Text(model.bannerTone == .protected ? "出口与防护验证通过 · Claude：\(model.state.claudeKnown == false ? "待确认" : (model.state.claude ? "运行中":"未运行"))":model.guidance.action).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(model.guidance.action)
                 }
                 Spacer(minLength:4)
                 Text("已阻断数据包 \(model.blockCountText) 次")

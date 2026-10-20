@@ -4,6 +4,13 @@ import Darwin
 @testable import GuardRuntime
 
 struct InventoryTests {
+    @Test func advisoryPartialReadDoesNotRevokeKernelProtectionOrClaimAbsence() throws {
+        var status=Status();status.phase="armed";status.verified=true;status.claude=true
+        try status.applyPreview(.init(records:[],issues:["transient"]),uid:501,allowPartial:true)
+        #expect(status.verified && status.claude)
+        #expect(!status.processInventoryComplete)
+    }
+
     @Test func realInventoryRetainsOwnReadableProcessAndRejectsAnyCollectedIssue() throws {
         let inventory=NativeProcesses.inventory()
         #expect(inventory.records.contains{$0.pid==getpid()})
