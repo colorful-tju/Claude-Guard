@@ -35,6 +35,10 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     var busyWorkers=false,uiPresent=true
     var claude:[ProcessRecord]=[]
     var inventoryIssues:[String]=[]
+    var savedInstallation:Installation?
+    var onOfficialCheck:(()->Void)?
+    var verifiedClaudeHashes:[String]=[]
+    var claudeBuildChanged=false
     var socketRows:[CSGSocket]=[]
     let privateFiles:PrivateControllerStorage
     let installation=Installation(uid:501,home:"/nonexistent",clients:[],coreHash:"core",flclashHash:"flclash",claudeHash:"claude")
@@ -51,7 +55,9 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
             uiIdentity:{pid in .init(pid:pid,startTime:1,executableIdentity:"ui")},uiAlive:{[self] _ in uiPresent},
             inventory:{[self] in .init(records:claude,issues:inventoryIssues)},
             terminateClaude:{[self] in try step("terminate");claude=[]},observeSockets:{[self] policy,_ in try step("sockets");return SocketObservationReport.collect(policy:policy,processes:claude.map(\.identity),readProcess:{pid in try #require(self.claude.first{$0.pid==pid})},readSockets:{_ in self.socketRows})},
-            preflightWorker:{[self] _,_ in try step("worker-preflight");return "test-worker"},verifyClaude:{[self] in try step("verify-app");beforeVerify?()},
+            preflightWorker:{[self] _,_ in try step("worker-preflight");return "test-worker"},verifyClaude:{[self] expected in verifiedClaudeHashes.append(expected);try step("verify-app");beforeVerify?();if claudeBuildChanged {throw ClaudeBuildChanged()}},
+            officialClaudeHash:{[self] _ in try step("official-claude");onOfficialCheck?();return "updated-claude"},
+            persistInstallation:{[self] updated in try step("save-installation");savedInstallation=updated},
             launchClaude:{[self] cancelled in try step("launch");if cancelled(){throw fail("cancelled launch")};launches += 1;onLaunch?()},
             runProbes:{[self] policy,baseline,startedAt,record,cancelled in
                 try step("probes");beforeProbe?();if cancelled(){throw fail("cancelled probes")};try record("fake probe complete")
@@ -893,5 +899,44 @@ struct PeriodicEgressControllerTests {
         try c.queue.sync {c.heartbeat();try c.begin(f.settings,launch:false);f.clock.advance(45);c.heartbeat();c.tick()}
         #expect(c.queue.sync{c.status.phase}=="armed")
         #expect(c.queue.sync{c.status.lastRisk.isEmpty && f.reference && !f.rules.isEmpty})
+    }
+}
+
+struct ClaudeRegistrationLifecycleTests {
+    @Test func buildMismatchFlagsPromptOnlyAfterNormalCleanup() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();f.claudeBuildChanged=true
+        let reply=c.handle(.init(.start,settings:f.settings))
+        #expect(!reply.ok && reply.status.claudeRegistrationRequired==true && reply.status.phase=="off")
+        #expect(f.launches==0 && !f.reference && f.rules.isEmpty)
+    }
+
+    @Test func registrationOnlyChangesClaudeHashAndNextLaunchUsesIt() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        let result=c.handle(.init(.refreshClaudeRegistration))
+        #expect(result.ok && result.status.phase=="off")
+        var expected=f.installation;expected.claudeHash="updated-claude"
+        #expect(f.savedInstallation==expected && c.installation==expected)
+        #expect(!f.calls.contains("activate") && !f.calls.contains("launch") && !f.calls.contains("terminate"))
+        c.heartbeat();try c.begin(f.settings,launch:true)
+        #expect(f.verifiedClaudeHashes==["updated-claude"])
+    }
+    @Test func activeOrUncertainSessionCannotUpdateRegistration() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
+        #expect(!c.handle(.init(.refreshClaudeRegistration)).ok)
+        #expect(f.savedInstallation==nil && c.status.phase=="armed" && f.reference)
+    }
+    @Test func failureOrLateProcessOrCancellationCannotUpdateRegistration() throws {
+        for reason in ["official-claude","save-installation","incomplete","late-process","cancel","rules"] {
+            let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+            if ["official-claude","save-installation"].contains(reason) {f.failure=reason}
+            if reason=="incomplete" {f.inventoryIssues=["unreadable"]}
+            if reason=="rules" {f.rules="foreign"}
+            f.onOfficialCheck={
+                if reason=="late-process" {f.claude=[.init(pid:123,ppid:1,uid:501,started:1,path:"/Applications/Claude.app/Contents/MacOS/Claude",name:"Claude")]}
+                if reason=="cancel" {c.requestStop()}
+            }
+            #expect(!c.handle(.init(.refreshClaudeRegistration)).ok)
+            #expect(c.installation.claudeHash=="claude" && f.savedInstallation==nil)
+        }
     }
 }

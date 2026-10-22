@@ -9,6 +9,7 @@ import GuardCore
     @Published public var testingIP=false
     @Published public var ipStale=false
     @Published public var state=Status() {didSet{observeInterruption();observeEgressWarning();updateActivityLease()}}
+    @Published public var registrationAlert=false
     @Published public var interruptionAlert:ProtectionInterruption?
     private var lastPresentedInterruption:String?
     private func observeInterruption() {
@@ -28,6 +29,7 @@ import GuardCore
         lastPresentedEgressWarning=event.id;egressWarningAlert=event
     }
     public func acknowledgeVisibleAlert() {
+        if registrationAlert {registrationAlert=false;return}
         if interruptionAlert != nil {acknowledgeInterruption();return}
         if let event=egressWarningAlert {preferences?.set(event.id,forKey:"acknowledgedEgressWarning")}
         egressWarningAlert=nil
@@ -157,6 +159,7 @@ import GuardCore
     @discardableResult public func request(_ operation:GuardOperation)->Task<Void,Never>? {
         if [.stop,.shutdown].contains(operation) {guard !stopping else{return nil};stopping=true}
         else {guard !busy else{return nil}}
+        if operation == .refreshClaudeRegistration {guard state.phase=="off" else{return nil}}
         if [.start,.verify].contains(operation) {
             guard state.phase=="off" else{return nil}
             if needsIPv6Off {failure="IPv6 default route detected";return nil}
@@ -175,6 +178,11 @@ import GuardCore
                     guard let self,version==self.revision else{return}
                     if [.stop,.shutdown].contains(operation),reply.ok {self.acknowledgeInterruption()}
                     self.state=reply.status;self.failure=reply.error ?? "";self.busy=false;self.stopping=false
+                    if operation == .start,reply.status.claudeRegistrationRequired==true {self.registrationAlert=true}
+                    if operation == .refreshClaudeRegistration {
+                        self.registrationAlert = !reply.ok
+                        if reply.ok {self.acknowledgeInterruption()}
+                    }
                     if operation == .inspect,reply.ok,self.settings.gateway.isEmpty {
                         let endpoint=reply.status.gateway.split(separator:":")
                         if endpoint.count==2,let port=UInt16(endpoint[1]) {self.settings.gateway=String(endpoint[0]);self.settings.port=port}
@@ -185,6 +193,7 @@ import GuardCore
                 await MainActor.run {
                     guard let self,version==self.revision else{return}
                     self.state.ipcUnavailable();self.failure=String(describing:error);self.busy=false;self.stopping=false
+                    if operation == .refreshClaudeRegistration {self.registrationAlert=true}
                     // A lost reply does not prove the daemon stopped. Request cancellation independently.
                     if [.start,.verify].contains(operation){self.request(.stop)}
                 }

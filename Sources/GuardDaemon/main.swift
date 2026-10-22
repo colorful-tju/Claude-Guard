@@ -63,7 +63,7 @@ do {
                         var timeout=timeval(tv_sec:5,tv_usec:0);setsockopt(client,SOL_SOCKET,SO_RCVTIMEO,&timeout,socklen_t(MemoryLayout<timeval>.size));setsockopt(client,SOL_SOCKET,SO_SNDTIMEO,&timeout,socklen_t(MemoryLayout<timeval>.size))
                         let request=try JSONDecoder().decode(Request.self,from:Wire.read(client))
                         guard request.protocolVersion==BuildIdentity.protocolVersion,UUID(uuidString:request.id) != nil else{throw fail("IPC protocol mismatch")}
-                        if [.heartbeat,.selfTest,.start,.verify,.ipv6Off,.ipv6Automatic,.ipv6Restore].contains(request.operation) {
+                        if [.refreshClaudeRegistration,.heartbeat,.selfTest,.start,.verify,.ipv6Off,.ipv6Automatic,.ipv6Restore].contains(request.operation) {
                             guard try guestHash(token:Data(token))==install.clients.first else{throw fail("Only the registered desktop UI may start or keep a session alive")}
                         }
                         if request.operation == .heartbeat {
@@ -76,10 +76,10 @@ do {
                             try Wire.write(JSONEncoder().encode(reply),client);return
                         }
                         let ticket=admission.ticket()
-                        if [.selfTest,.start,.verify,.ipv6Off,.ipv6Automatic,.ipv6Restore].contains(request.operation){try controller.heartbeat(clientPID:pid)}
+                        if [.refreshClaudeRegistration,.selfTest,.start,.verify,.ipv6Off,.ipv6Automatic,.ipv6Restore].contains(request.operation){try controller.heartbeat(clientPID:pid)}
                         if [.stop,.shutdown].contains(request.operation){admission.cancelPendingStarts();controller.requestStop(restoreIPv6:request.operation == .shutdown)}
                         var reply=queue.sync{ ()->Reply in
-                            if [.selfTest,.start,.verify,.ipv6Off,.ipv6Automatic,.ipv6Restore].contains(request.operation),!admission.accepts(ticket){return Reply(ok:false,status:controller.status,error:"Queued start cancelled by OFF")}
+                            if [.refreshClaudeRegistration,.selfTest,.start,.verify,.ipv6Off,.ipv6Automatic,.ipv6Restore].contains(request.operation),!admission.accepts(ticket){return Reply(ok:false,status:controller.status,error:"Queued start cancelled by OFF")}
                             return controller.handle(request)
                         };reply.requestID=request.id
                         try Wire.write(JSONEncoder().encode(reply),client)

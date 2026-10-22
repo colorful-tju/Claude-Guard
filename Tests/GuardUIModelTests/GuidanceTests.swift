@@ -57,3 +57,10 @@ struct GuidanceTests {
         #expect(Guidance.current(status,failure:"",busy:false,confirmation:true,ip:nil,stale:false).category=="待启动")
     }
 }
+
+struct ClaudeUpdateGuidanceTests {
+    @Test func buildChangeExplainsRegistrationInsteadOfNetworkFailure() {
+        let message=Guidance.reason("rejected(\"Claude build changed; reinstall registration\")")
+        #expect(message.title.contains("Claude") && message.action.contains("重新登记"))
+    }
+}

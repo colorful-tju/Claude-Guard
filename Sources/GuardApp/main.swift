@@ -72,6 +72,7 @@ private struct MenuStatus:View {
         Label("Claude · \(model.menuStatus)",systemImage:model.state.verified ? "checkmark.shield.fill":"shield.lefthalf.filled")
             .onChange(of:model.interruptionAlert?.id){_,id in if id != nil {openWindow(id:"main");NSApp.activate(ignoringOtherApps:true)}}
             .onChange(of:model.egressWarningAlert?.id){_,id in if id != nil {openWindow(id:"main");NSApp.activate(ignoringOtherApps:true)}}
+            .onChange(of:model.registrationAlert){_,visible in if visible {openWindow(id:"main");NSApp.activate(ignoringOtherApps:true)}}
     }
 }
 private struct GuardMenu:View {
@@ -173,11 +174,18 @@ private struct LauncherView:View {
         .onChange(of:model.state.phase){_,_ in model.ipStale=true}
         .onChange(of:model.interruptionAlert?.id){_,id in if id != nil && !preview {showWelcome=false;NSApp.activate(ignoringOtherApps:true)}}
         .onChange(of:model.egressWarningAlert?.id){_,id in if id != nil && !preview {showWelcome=false;NSApp.activate(ignoringOtherApps:true)}}
-        .alert(model.interruptionAlert != nil ? "启动器自动停止提醒":"出口暂时无法核验",isPresented:Binding(get:{model.interruptionAlert != nil || model.egressWarningAlert != nil},set:{if !$0 {model.acknowledgeVisibleAlert()}})) {
+        .onChange(of:model.registrationAlert){_,visible in if visible && !preview {showWelcome=false;NSApp.activate(ignoringOtherApps:true)}}
+        .alert(model.registrationAlert ? "Claude 已更新，需要重新登记":model.interruptionAlert != nil ? "启动器自动停止提醒":"出口暂时无法核验",isPresented:Binding(get:{model.registrationAlert || model.interruptionAlert != nil || model.egressWarningAlert != nil},set:{if !$0 {model.acknowledgeVisibleAlert()}})) {
+            if model.registrationAlert {
+                Button("验证并重新登记 Claude"){model.registrationAlert=false;model.request(.refreshClaudeRegistration)}
+                    .disabled(model.busy || model.state.phase != "off")
+            }
             Button("查看诊断"){page = .diagnostics;model.acknowledgeVisibleAlert()}
             Button("知道了",role:.cancel){model.acknowledgeVisibleAlert()}
         } message: {
-            if let event=model.interruptionAlert {
+            if model.registrationAlert {
+                Text("Claude 的构建与原登记不一致，通常由自动更新引起，并不表示 IP 泄漏。\n\n请先退出 Claude 和 Claude Code，确认防护 OFF。点击后将核验 Anthropic 官方签名并更新登记，无需重新安装防护器；不会更改网络设置或自动启动 Claude。\n\n" + (model.state.phase != "off" ? "当前尚未 OFF，请先完成关闭或恢复。\n":"") + (model.failure.contains("Claude registration") ? String(model.failure.prefix(350)):""))
+            } else if let event=model.interruptionAlert {
                 Text("\(event.exitConfirmed ? "启动器已主动关闭 Claude。":event.requestedClaudeStop ? "启动器已请求关闭 Claude，但尚未确认全部退出。":"启动器已结束防护验证。")\n\(Guidance.reason(event.reason).title)\n\(Guidance.reason(event.reason).action)\n时间：\(event.timestamp)\n原始原因：\(String(event.reason.prefix(400)))")
             } else if let event=model.egressWarningAlert {
                 Text("两次出口检测均未取得可用结果。Claude 未关闭，PF 与本地防护检查继续运行。当前公网出口尚未确认，不代表检测到 IP 泄漏。\n请检查代理连通性；程序每 5 分钟重测，恢复后自动清除提醒。检测到不同公网 IP 仍会立即关闭 Claude。\n时间：\(event.timestamp)")

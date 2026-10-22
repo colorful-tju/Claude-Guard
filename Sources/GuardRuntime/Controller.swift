@@ -2,7 +2,7 @@ import Foundation
 import GuardCore
 import Darwin
 public final class Controller: @unchecked Sendable {
-    public let installation:Installation;public let commands:Commands;public let pf:any PacketFiltering;public let inspector:any RuntimeInspecting
+    public private(set) var installation:Installation;public let commands:Commands;public let pf:any PacketFiltering;public let inspector:any RuntimeInspecting
     private let effects:ControllerEffects;private let storage:any ControllerStorage;private let activity:ControllerActivity
     public private(set) var status=Status()
     private var journal:Journal?;private var session:SafetySession?;private var baseline:LocalSnapshot?;private var settings:Settings?
@@ -172,7 +172,7 @@ public final class Controller: @unchecked Sendable {
                 for result in bundle.negative{log("probe=\(result.kind.rawValue) label=\(result.dedicatedLabel) counter=\(result.counterBefore)->\(result.counterAfter) blocked=true measuredAt=\(result.measuredAt)")}
                 for result in bundle.egress{log("echo=\(result.service.rawValue) ipv4=\(result.ipv4) measuredAt=\(result.measuredAt)")}
                 // Include app identity verification in the final-snapshot window.
-                if launch {try effects.verifyClaude();try requireActive()}
+                if launch {try effects.verifyClaude(installation.claudeHash);status.claudeRegistrationRequired=false;try requireActive()}
                 finalEvidence=try inspector.runtime(settings:settings)
                 final=try snapshot(finalEvidence,policy:policy)
                 var diagnostic=ValidationDiagnostics(bundle:bundle,final:final,routesBefore:protectedEvidence.routeDetail,routesAfter:finalEvidence.routeDetail)
@@ -217,6 +217,7 @@ public final class Controller: @unchecked Sendable {
             status.message=launch ? "Claude 已安全启动（测试版）" : "防护验收通过；未启动 Claude。请完成 OFF 和恢复测试"
             egressMonitor=EgressMonitor(verifiedAt:effects.clock.sample().uptime);activity.allowProtectedGrace()
         }catch {
+            if error is ClaudeBuildChanged {status.claudeRegistrationRequired=true}
             let cause=String(describing:error);status.lastRisk=cause;log("start rejected: \(cause)")
             let startupEvents=inspector.networkEventDiagnostics()
             if journal != nil {do{try stop(reason:cause,restoreIPv6:false)}catch{status.phase="recoveryBlocked";status.verified=false}}
@@ -555,6 +556,30 @@ public final class Controller: @unchecked Sendable {
             log(status.message);throw error
         }
     }
+    private func refreshClaudeRegistration() throws {
+        guard journal==nil,status.phase=="off",!storage.exists("session.json"),!storage.exists("enable-result.txt"),
+              try pf.canonical().trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {
+            throw fail("Claude registration: 请先关闭防护并完成恢复，再重新登记")
+        }
+        try requireActive();try effects.assertQuiescent()
+        func requireClaudeAbsent() throws {
+            guard NativeProcesses.claude(try effects.inventory().requireComplete(),uid:installation.uid).isEmpty else {
+                throw fail("Claude registration: 请先退出 Claude 和 Claude Code，再重新登记")
+            }
+        }
+        try requireClaudeAbsent()
+        let newHash=try effects.officialClaudeHash({[self] in cancelled()})
+        try requireActive();try effects.assertQuiescent();try requireClaudeAbsent()
+        guard !storage.exists("session.json"),!storage.exists("enable-result.txt"),
+              try pf.canonical().trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{throw fail("Claude registration: 防护资产变化，未更新登记")}
+        try requireActive()
+        var updated=installation;updated.claudeHash=newHash
+        try effects.persistInstallation(updated)
+        installation=updated
+        status.claudeRegistrationRequired=false;status.lastRisk="";status.interruption=nil
+        status.message="Claude 官方签名已验证，登记已更新。请重新点击「安全启动 Claude」。"
+        log("Claude registration refreshed; official signature verified; no network changes or launch")
+    }
     public func handle(_ request:Request) -> Reply {
         do {
             switch request.operation {
@@ -562,6 +587,9 @@ public final class Controller: @unchecked Sendable {
                 if journal != nil {return .init(ok:true,status:status)}
                 let inventory=effects.inventory()
                 try status.applyPreview(inventory,uid:installation.uid,allowPartial:journal == nil || status.phase=="recoveryBlocked",known:previousHealthy?.claudeProcesses ?? [],corePath:installation.registeredCorePath)
+            case .refreshClaudeRegistration:
+                do {try refreshClaudeRegistration()}
+                catch {throw fail("Claude registration: " + String(describing:error))}
             case .heartbeat:heartbeat()
             case .progress:return .init(ok:true,status:progressStatus())
             case .inspect:try inspect()

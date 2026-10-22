@@ -7,6 +7,8 @@ public struct Guidance:Equatable {
     public let severe:Bool
     public init(_ category:String,_ title:String,_ action:String,severe:Bool=false){self.category=category;self.title=title;self.action=action;self.severe=severe}
     public static func reason(_ raw:String)->Guidance {
+        if raw.contains("Claude build changed") {return .init("Claude 已更新","Claude 版本与登记信息不一致","退出 Claude/Code 并确认防护 OFF，在弹窗点击「验证并重新登记 Claude」，然后重新安全启动。")}
+        if raw.contains("Claude registration") {return .init("登记未完成","Claude 重新登记未完成",raw)}
         if raw.contains("Startup validation retry exhausted") {
             return .init("启动未通过","完整验证已重试一次，网络仍在变化","Claude 未启动。先等待网络稳定；若反复出现请导出反馈，不等于已检测到泄漏。")
         }

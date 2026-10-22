@@ -153,3 +153,20 @@ struct HeartbeatTransientFailureTests {
         m.state.phase="off";#expect(m.blockCountHelp.contains("上次会话"))
     }
 }
+
+struct ClaudeRegistrationUITests {
+    @Test @MainActor func buildChangedOpensPromptAndRefreshDoesNotStartClaude() async throws {
+        let model=AppModel(autoPoll:false,preferences:nil,transport:{request in
+            var s=Status()
+            if request.operation == .start {s.claudeRegistrationRequired=true;return .init(ok:false,status:s,error:"Claude build changed; reinstall registration")}
+            #expect(request.operation == .refreshClaudeRegistration)
+            s.claudeRegistrationRequired=false;s.message="登记已更新";return .init(ok:true,status:s)
+        })
+        await model.request(.start)?.value
+        #expect(model.registrationAlert && model.state.phase=="off")
+        await model.request(.refreshClaudeRegistration)?.value
+        #expect(!model.registrationAlert && model.failure.isEmpty && model.state.phase=="off")
+        model.state.phase="armed"
+        #expect(model.request(.refreshClaudeRegistration)==nil)
+    }
+}

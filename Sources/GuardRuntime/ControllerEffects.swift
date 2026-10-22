@@ -90,7 +90,9 @@ struct ControllerEffects: Sendable {
     let terminateClaude:@Sendable ()throws->Void
     let observeSockets:@Sendable (GuardPolicy,[ProcessIdentity])throws->SocketObservationReport
     let preflightWorker:@Sendable (@escaping ControllerProbeRecord,@escaping ControllerCancellation)throws->String
-    let verifyClaude:@Sendable ()throws->Void
+    let verifyClaude:@Sendable (String)throws->Void
+    let officialClaudeHash:@Sendable (@escaping ControllerCancellation)throws->String
+    let persistInstallation:@Sendable (Installation)throws->Void
     let launchClaude:@Sendable (@escaping ControllerCancellation)throws->Void
     let runProbes:ControllerProbeRunner
     let healthProbe:@Sendable (@escaping ControllerCancellation)throws->EgressReport
@@ -114,7 +116,12 @@ struct ControllerEffects: Sendable {
             },inventory:{NativeProcesses.inventory()},terminateClaude:{try NativeProcesses.terminateClaude(uid:installation.uid,known:inspector.trackedClaude)},
             observeSockets:{policy,processes in
                 SocketObservationReport.collect(policy:policy,processes:processes)
-            },preflightWorker:{record,cancel in try ValidationProbes.preflightWorker(commands:commands,record:record,cancelled:cancel)},verifyClaude:{guard try codeHash(path:"/Applications/Claude.app")==installation.claudeHash else{throw fail("Claude build changed; reinstall registration")}},
+            },preflightWorker:{record,cancel in try ValidationProbes.preflightWorker(commands:commands,record:record,cancelled:cancel)},verifyClaude:{expected in guard try codeHash(path:ClaudeRegistration.appPath)==expected else{throw ClaudeBuildChanged()}},
+            officialClaudeHash:{cancel in try ClaudeRegistration.verifiedHash(commands:commands,cancelled:cancel)},
+            persistInstallation:{updated in
+                try PrivateFiles.write(updated,to:Paths.root+"/installation.json")
+                guard try PrivateFiles.read(Paths.root+"/installation.json",as:Installation.self)==updated else{throw fail("Claude registration: 登记文件回读不一致")}
+            },
             launchClaude:{cancelled in _=try commands.checked("/bin/launchctl",["asuser",String(installation.uid),"/usr/bin/sudo","-u","#"+String(installation.uid),"/usr/bin/open","-a","/Applications/Claude.app"],timeout:5,cancelled:cancelled)},
             runProbes:{policy,baseline,installedAt,record,cancelled in try ValidationProbes(pf:pf,commands:commands,record:record,cancelled:cancelled).run(policy:policy,baseline:baseline,installedAt:installedAt)},
             healthProbe:{cancelled in PeriodicEgress.collect(cancelled:cancelled){service in try ProbeExecutor.egress(service:service,commands:commands,cancelled:cancelled)}},assertQuiescent:{try commands.assertQuiescent()},boot:{bootID()},ipv6:TemporaryIPv6())
