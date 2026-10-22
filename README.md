@@ -4,7 +4,7 @@
 
 面向 macOS 的小型桌面工具，为通过 HTTP 代理使用 Claude Desktop 与本机 Claude Code 的用户提供临时出口限制、启动前验收与运行中监控。使用结束后，按顺序退出受保护进程并恢复本工具修改的网络状态。
 
-> **0.5.17 测试版 · macOS 14+ · 源码可见 / 非商业 / 禁止二次开发**
+> **0.5.18 测试版 · macOS 14+ · 源码可见 / 非商业 / 禁止二次开发**
 > 个人测试版安装修复，尚未完成 Apple 公证，不是 Anthropic 官方软件。作者：[colorful / @colorful-tju](https://github.com/colorful-tju)。许可见 [LICENSE](LICENSE)。
 
 ## 为什么需要它
@@ -47,7 +47,7 @@ Claude Guard 面向这样的使用场景：你已经准备好一个 **数字 IPv
 
 ### 1. 打开 DMG
 
-从 [Releases](https://github.com/colorful-tju/Claude-Guard/releases/tag/v0.5.17) 获取对应架构的 DMG：`Claude-Guard-0.5.17-macOS-AppleSilicon-arm64.dmg` 或 `Claude-Guard-0.5.17-macOS-Intel-x86_64.dmg`。分别提供 Apple Silicon 与 Intel 测试包，适用于 Mac、macOS 14 或以上；不需要 Xcode、源码或终端构建命令。macOS 26 使用系统 Liquid Glass，旧系统使用材质回退。
+从 [Releases](https://github.com/colorful-tju/Claude-Guard/releases/tag/v0.5.18) 获取对应架构的 DMG：`Claude-Guard-0.5.18-macOS-AppleSilicon-arm64.dmg` 或 `Claude-Guard-0.5.18-macOS-Intel-x86_64.dmg`。分别提供 Apple Silicon 与 Intel 测试包，适用于 Mac、macOS 14 或以上；不需要 Xcode、源码或终端构建命令。macOS 26 使用系统 Liquid Glass，旧系统使用材质回退。
 
 打开映像，按顶层说明先卸载旧版，再双击「双击安装 Claude Guard.app」；首次安装跳过卸载，**无需拖入应用程序文件夹**。根据图形提示完成管理员授权，成功后选择打开 App。更新前请先在旧版菜单栏选择「恢复并退出」。不要直接删除旧助手或恢复记录。
 
@@ -243,3 +243,8 @@ DMG 顶层提供「移除 Claude Guard」、安装器以及「先卸载旧版，
 ## 0.5.17 更新：Claude 更新后在弹窗中重新登记
 
 Claude 自动更新导致构建指纹变化时，启动失败弹窗提供「验证并重新登记 Claude」。退出 Claude/Code 并确认防护 OFF 后，助手核验 Anthropic 官方签名并更新登记，无需再次卸载防护器。登记不改网络配置，也不自动启动 Claude；完成后重新安全启动。已有助手权限可复用，无需为每次重新登记额外输入管理员密码；非官方、签名异常或验证中途变更的构建会被拒绝。详见 [验证与恢复说明](docs/RELEASE-0.5.17.md)。
+
+
+## 0.5.18 更新：降低高负载下配置解析超时误停
+
+每次监控仍读取并校验已登记配置的完整内容；内容指纹不变时复用已验证的解析结果，不再每轮启动 Ruby。内容变化必须重新解析并匹配已确认指纹；文件不可读、权限/类型异常或读取期间变化仍拒绝。实际代理 Core、网关连接、TUN、PF 与出口检查保持原有要求。本次没有放宽心跳、PF 或全局超时，也不保证任意系统过载下都能持续运行。详见 [验证与恢复说明](docs/RELEASE-0.5.18.md)。

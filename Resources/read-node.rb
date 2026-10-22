@@ -2,7 +2,7 @@ require 'yaml'
 require 'json'
 require 'digest'
 # Safe_load rejects Ruby object tags, aliases, duplicate keys are checked separately.
-raw = File.binread(ARGV.fetch(0))
+raw = ARGV.fetch(0) == '--stdin' ? STDIN.read(2_000_001) : File.binread(ARGV.fetch(0))
 raise 'oversized configuration' if raw.bytesize > 2_000_000
 stream = Psych.parse_stream(raw)
 raise 'multiple YAML documents unsupported' unless stream.children.length == 1
