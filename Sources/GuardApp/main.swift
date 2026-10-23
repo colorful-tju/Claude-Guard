@@ -27,6 +27,10 @@ final class WindowLifecycle:NSObject,NSApplicationDelegate {
             sample.state.message="离线界面预览 · 未连接助手，未运行网络检测"
             sample.state.processInventoryComplete=true
             let scenario=CommandLine.arguments.count>3 ? CommandLine.arguments[3]:"empty"
+            if scenario=="flclash" {sample.flclashCatalog = .init(entries:[
+                .init(path:"/Users/example/Library/Application Support/com.follow.clash/profiles/123.yaml",name:"Canada HTTP",modifiedAt:Date(),generated:false),
+                .init(path:"/Users/example/Library/Application Support/com.follow.clash/profiles/456.yaml",name:"其他订阅",modifiedAt:Date(),generated:false),
+                .init(path:"/Users/example/Library/Application Support/com.follow.clash/config.yaml",name:"生成配置（不保证是当前订阅）",modifiedAt:Date(),generated:true)])}
             sample.testingIP=scenario=="loading"
             if scenario=="armed" {sample.state.phase="armed";sample.state.verified=true;sample.state.claude=true;sample.state.blockedPackets=128}
 
@@ -40,7 +44,8 @@ final class WindowLifecycle:NSObject,NSApplicationDelegate {
             _model=StateObject(wrappedValue:sample)
             let path=CommandLine.arguments[2]
             DispatchQueue.main.async {
-                let host=NSHostingView(rootView:scenario=="welcome" ? AnyView(WelcomeView(model:sample,configure:{})):AnyView(LauncherView(model:sample,preview:true,previewPage:scenario)))
+                let content:AnyView = scenario=="flclash" ? AnyView(FlClashPicker(model:sample)) : scenario=="welcome" ? AnyView(WelcomeView(model:sample,configure:{})):AnyView(LauncherView(model:sample,preview:true,previewPage:scenario))
+                let host=NSHostingView(rootView:content)
                 let window=NSWindow(contentRect:NSRect(x:0,y:0,width:1100,height:660),styleMask:[.titled,.resizable],backing:.buffered,defer:false)
                 window.contentView=host;window.orderFront(nil);host.layoutSubtreeIfNeeded();window.display()
                 DispatchQueue.main.asyncAfter(deadline:.now()+0.5){
@@ -97,7 +102,7 @@ private struct WelcomeView:View {
     private let descriptions=[
         "启动器先验证代理出口与防护，再启动 Claude。IP 匹配只是其中一项检查。当前仍是本机测试版，首次通过图形程序完成管理员授权。",
         "由你手动启动已登记的兼容代理核心、选择 HTTP 节点并开启 TUN。启动器不会切换代理。若主页面提醒存在 IPv6 默认路由，先退出 Claude/Code，再点击临时关闭 IPv6。",
-        "下一步进入网络设置，先选择并登记当前使用的单节点 HTTP 配置。成功后填入候选网关；你需要核对服务商提供的网关、端口和预期出口。内置 IP 检测只能辅助填写预期出口，不能推断网关或端口。",
+        "下一步进入网络设置，点“读取 FLClash 配置”，按订阅名称选择并登记当前使用的单节点 HTTP 配置；其他客户端可手动选文件。你需要核对服务商提供的网关、端口和预期出口。内置 IP 检测只能辅助填写预期出口，不能推断网关或端口。",
         "关闭主窗口后，菜单栏与防护继续运行。菜单栏的「恢复并退出」会先结束受保护的 Claude/Code、恢复本工具设置再退出；恢复失败会留在应用中。配置会记住，防护不会自动开启。"
     ]
     var body:some View {
@@ -140,6 +145,7 @@ private struct LauncherView:View {
     @State private var page:Page? = .overview
     @State private var showWelcome=false
     @State private var showEndpointHelp=false
+    @State private var showFlClashPicker=false
     @Environment(\.openWindow) private var openWindow
     private var canStart:Bool {model.confirmation && !model.state.fingerprint.isEmpty && model.state.processInventoryComplete && model.state.phase=="off" && !model.busy && !model.needsIPv6Off}
     var body:some View {
@@ -171,6 +177,7 @@ private struct LauncherView:View {
         }.frame(minWidth:1100,minHeight:660)
         .task {if preview {if previewPage=="about" {page = .about};if previewPage=="network" {page = .network}};if !preview {showWelcome = !model.onboardingComplete;model.poll();model.testIP()}}
         .sheet(isPresented:$showWelcome){WelcomeView(model:model){showWelcome=false;page = .network}}
+        .sheet(isPresented:$showFlClashPicker){FlClashPicker(model:model)}
         .onChange(of:model.state.phase){_,_ in model.ipStale=true}
         .onChange(of:model.interruptionAlert?.id){_,id in if id != nil && !preview {showWelcome=false;NSApp.activate(ignoringOtherApps:true)}}
         .onChange(of:model.egressWarningAlert?.id){_,id in if id != nil && !preview {showWelcome=false;NSApp.activate(ignoringOtherApps:true)}}
@@ -301,8 +308,10 @@ private struct LauncherView:View {
                     .font(.caption.monospaced()).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)
                 Text("不要选旧订阅或仅为通过检查导出的文件。配置登记只提供候选节点，实际 Core/网关/TUN/出口仍须验证。")
                     .font(.caption).foregroundStyle(.secondary)
-                Button("选择并登记配置…"){model.chooseProxyConfiguration()}.buttonStyle(.borderedProminent)
-                    .disabled(model.busy || model.state.phase != "off")
+                HStack {
+                    Button("读取 FLClash 配置…"){model.readFlClashConfigurations();showFlClashPicker=true}.buttonStyle(.borderedProminent)
+                    Button("手动选择文件…"){model.chooseProxyConfiguration()}.buttonStyle(.bordered)
+                }.disabled(model.busy || model.state.phase != "off")
             }
             card("代理端点",icon:"server.rack") {
                 Text("首次使用不预填地址。网关 / 端口来自代理服务商；公网 IP 检测只能辅助填写预期出口。").font(.caption).foregroundStyle(.secondary)
@@ -427,5 +436,57 @@ private struct IPPanel:View {
                 .help("绕过系统代理设置，使用当前系统路由 / TUN。不在线查询地理位置；检测失败不改变安全模式。ARMED 由守护进程独立验证。")
         }.padding(16).frame(maxWidth:.infinity).frame(height:210,alignment:.topLeading)
          .background(.background.opacity(0.7),in:RoundedRectangle(cornerRadius:18))
+    }
+}
+
+private struct FlClashPicker:View {
+    @ObservedObject var model:AppModel
+    @State private var selection:String?
+    @Environment(\.dismiss) private var dismiss
+    var body:some View {
+        VStack(alignment:.leading,spacing:16) {
+            HStack {
+                Label("选择 FLClash 配置",systemImage:"doc.on.doc").font(.title2.bold())
+                Spacer()
+                Button("刷新"){selection=nil;model.readFlClashConfigurations()}
+                    .disabled(model.readingFlClash || model.busy || model.state.phase != "off")
+            }
+            Text("按 FLClash 中的订阅名称选择。这里只登记候选配置，不会切换 FLClash 的订阅或节点，也不代表已验证防护。")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+            if model.readingFlClash {
+                HStack{ProgressView().controlSize(.small);Text("正在读取本机配置列表…")}.frame(maxWidth:.infinity,maxHeight:.infinity)
+            } else if !model.flclashCatalogError.isEmpty {
+                Text(model.flclashCatalogError).foregroundStyle(.orange).frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
+            } else if let catalog=model.flclashCatalog {
+                if !catalog.warning.isEmpty {Text(catalog.warning).font(.caption).foregroundStyle(.orange)}
+                if catalog.entries.isEmpty {
+                    Text("未找到可读取的 YAML。请先在 FLClash 导入配置；特殊安装路径可使用「手动选择文件」。")
+                        .foregroundStyle(.secondary).frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
+                } else {
+                    List(catalog.entries,selection:$selection){entry in
+                        HStack(alignment:.top,spacing:12) {
+                            Image(systemName:entry.generated ? "doc.badge.gearshape":"doc.text").foregroundStyle(entry.generated ? .orange:.blue).padding(.top,3)
+                            VStack(alignment:.leading,spacing:5) {
+                                Text(entry.name).font(.headline).lineLimit(2)
+                                Text(entry.generated ? "config.yaml · 可能是旧快照，请核对后再使用":entry.filename).font(.caption.monospaced()).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(entry.modifiedAt.formatted(date:.abbreviated,time:.shortened)).font(.caption).foregroundStyle(.secondary)
+                        }.padding(.vertical,7).tag(entry.id)
+                    }.listStyle(.inset).clipShape(RoundedRectangle(cornerRadius:12))
+                }
+            } else {Spacer()}
+            Text("仅支持单节点 HTTP 配置；登记时校验文件，安全启动时仍会核验网关、TUN 和出口。")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("取消"){dismiss()}.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("选择并登记") {
+                    guard let path=selection,model.flclashCatalog?.entries.contains(where:{$0.path==path})==true else{return}
+                    model.request(.registerProxyConfiguration,configurationPath:path);dismiss()
+                }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .disabled(selection==nil || model.readingFlClash || model.busy || model.state.phase != "off")
+            }
+        }.padding(24).frame(width:700,height:490).background(.regularMaterial)
     }
 }

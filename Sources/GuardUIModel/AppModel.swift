@@ -80,6 +80,9 @@ import GuardCore
     @Published public var busy=false
     @Published public var failure=""
     @Published public var confirmation=false
+    @Published public var flclashCatalog:FlClashCatalog?
+    @Published public var readingFlClash=false
+    @Published public var flclashCatalogError=""
     private let transport:@Sendable (Request)throws->Reply
     private let preferences:UserDefaults?
     private var timer:Timer?
@@ -225,6 +228,22 @@ import GuardCore
                 settings.expectedEgress=ip
                 ipCheck = .init(expected:ip,samples:result.samples,startedAt:result.startedAt)
                 ipStale=false;failure=""
+            }
+        }
+    }
+    @discardableResult public func readFlClashConfigurations(read:@escaping @Sendable ()throws->FlClashCatalog = {try FlClashCatalog.discover()})->Task<Void,Never>? {
+        guard !busy,!readingFlClash,state.phase=="off" else{return nil}
+        readingFlClash=true;flclashCatalog=nil;flclashCatalogError=""
+        let version=revision
+        return Task.detached{[weak self] in
+            let result=Result{try read()}
+            await MainActor.run {
+                guard let self else{return};self.readingFlClash=false
+                guard version==self.revision,!self.busy,self.state.phase=="off" else{return}
+                switch result {
+                case .success(let catalog):self.flclashCatalog=catalog
+                case .failure(let error):self.flclashCatalogError=String(describing:error)
+                }
             }
         }
     }

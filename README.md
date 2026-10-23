@@ -4,7 +4,7 @@
 
 面向 macOS 的小型桌面工具，为通过 HTTP 代理使用 Claude Desktop 与本机 Claude Code 的用户提供临时出口限制、启动前验收与运行中监控。使用结束后，按顺序退出受保护进程并恢复本工具修改的网络状态。
 
-> **0.5.19 测试版 · macOS 14+ · 源码可见 / 非商业 / 禁止二次开发**
+> **0.5.20 测试版 · macOS 14+ · 源码可见 / 非商业 / 禁止二次开发**
 > 个人测试版安装修复，尚未完成 Apple 公证，不是 Anthropic 官方软件。作者：[colorful / @colorful-tju](https://github.com/colorful-tju)。许可见 [LICENSE](LICENSE)。
 
 ## 为什么需要它
@@ -47,7 +47,7 @@ Claude Guard 面向这样的使用场景：你已经准备好一个 **数字 IPv
 
 ### 1. 打开 DMG
 
-从 [Releases](https://github.com/colorful-tju/Claude-Guard/releases/tag/v0.5.19) 获取对应架构的 DMG：`Claude-Guard-0.5.19-macOS-AppleSilicon-arm64.dmg` 或 `Claude-Guard-0.5.19-macOS-Intel-x86_64.dmg`。分别提供 Apple Silicon 与 Intel 测试包，适用于 Mac、macOS 14 或以上；不需要 Xcode、源码或终端构建命令。macOS 26 使用系统 Liquid Glass，旧系统使用材质回退。
+从 [Releases](https://github.com/colorful-tju/Claude-Guard/releases/tag/v0.5.20) 获取对应架构的 DMG：`Claude-Guard-0.5.20-macOS-AppleSilicon-arm64.dmg` 或 `Claude-Guard-0.5.20-macOS-Intel-x86_64.dmg`。分别提供 Apple Silicon 与 Intel 测试包，适用于 Mac、macOS 14 或以上；不需要 Xcode、源码或终端构建命令。macOS 26 使用系统 Liquid Glass，旧系统使用材质回退。
 
 打开映像，按顶层说明先卸载旧版，再双击「双击安装 Claude Guard.app」；首次安装跳过卸载，**无需拖入应用程序文件夹**。根据图形提示完成管理员授权，成功后选择打开 App。更新前请先在旧版菜单栏选择「恢复并退出」。不要直接删除旧助手或恢复记录。
 
@@ -76,7 +76,7 @@ Claude Guard 面向这样的使用场景：你已经准备好一个 **数字 IPv
 
 **网关 ≠ 出口。** IP 检测只用于预期出口，绝不自动推断网关或端口。即使两者恰好相同，也要分别核对。问号按钮提供同样的填写说明。
 
-先在“网络设置 → 选择并登记配置”选定当前代理使用的单节点 HTTP YAML；登记成功仅代表候选配置通过，尚未证明 Core 使用它。随后核对候选网关和指纹，点击「确认代理端点」。若提示 IPv6 默认路由存在，在 OFF 且 Claude/Code 退出后点击临时 IPv6“关闭”。本版不会把 `ipv6: false` 当作系统 IPv6 已关闭的证明。
+先在“网络设置 → 读取 FLClash 配置”按订阅名称选择当前使用的单节点 HTTP 配置，再点“选择并登记”；特殊位置或其他客户端可用“手动选择文件”。登记成功仅代表候选配置通过，尚未证明 Core 使用它。随后核对候选网关和指纹，点击「确认代理端点」。若提示 IPv6 默认路由存在，在 OFF 且 Claude/Code 退出后点击临时 IPv6“关闭”。本版不会把 `ipv6: false` 当作系统 IPv6 已关闭的证明。
 
 ### 5. 先验收，再日常使用
 
@@ -253,3 +253,8 @@ Claude 自动更新导致构建指纹变化时，启动失败弹窗提供「验�
 ## 0.5.19 更新：明确选择配置，避免误读旧订阅
 
 默认安装不再把固定 `config.yaml` 当成当前运行配置。网络设置显示登记路径，并提供“选择并登记配置”；只有 OFF 且自身防护资产已清理才能保存新路径。选择错误或解析失败保留原登记。收到“22 个节点”等提示时，应核对路径，不能删除旧订阅或降低检查要求。配置只是候选依据，实际 Core 身份、网关连接、TUN、PF 与出口验证保持不变。本版不自动推断 FLClash 内存中加载的配置路径，不扫描并挑选任意能通过的 YAML。具体见 [0.5.19 验证说明](docs/RELEASE-0.5.19.md)。
+
+
+## 0.5.20 更新：从 FLClash 列表选择配置
+
+网络设置新增“读取 FLClash 配置”，显示本机保存订阅的名称、文件名及修改时间，无需查找隐藏的 profiles 目录。用户选择后沿用配置登记检查，不会自动切换订阅。config.yaml 单列为可能陈旧的生成配置；名称数据库不可读时以文件名显示。支持标准安装目录，特殊位置保留手动选文件。详见 [0.5.20 验证与恢复](docs/RELEASE-0.5.20.md)。
