@@ -18,7 +18,7 @@ on run
             display dialog "请先在旧版菜单栏选择「恢复并退出」，确认 Claude/Code 已退出、临时 IPv6 已恢复，再打开本程序。不会自动结束你的应用。" buttons {"知道了"} default button 1 with icon caution
             return
         end if
-        set choice to button returned of (display dialog "Claude Guard\n\n个人测试版未经过 Apple 公证。继续表示你信任此来源，并同意仅移除本安装包解出的 Claude Guard 副本的下载隔离属性，再核验签名；不会关闭 Gatekeeper 或修改其他应用。\n\n将 App 与助手配置到此 Mac，需要一次管理员授权。不会启动代理、切换网络或开启防护。\n\n默认使用标准路径的 FLClash；其他兼容核心可手动选择其可执行文件及运行配置。恢复和移除工具可从 App 的「恢复工具」打开。" buttons {"取消", "其他核心…", "继续"} default button "继续" cancel button "取消")
+        set choice to button returned of (display dialog "Claude Guard\n\n个人测试版未经过 Apple 公证。继续表示你信任此来源，并同意仅移除本安装包解出的 Claude Guard 副本的下载隔离属性，再核验签名；不会关闭 Gatekeeper 或修改其他应用。\n\n将 App 与助手配置到此 Mac，需要一次管理员授权。不会启动代理、切换网络或开启防护。\n\n默认登记标准路径的 FLClash 核心；不会默认读取固定 config.yaml。安装后请在网络设置选择并登记当前使用的配置。其他兼容核心可手动选择核心及配置。恢复和移除工具可从 App 的「恢复工具」打开。" buttons {"取消", "其他核心…", "继续"} default button "继续" cancel button "取消")
         set corePath to ""
         set configPath to ""
         if choice is "其他核心…" then
@@ -34,7 +34,7 @@ on run
         with timeout of 600 seconds
             set resultText to do shell script commandText with administrator privileges
         end timeout
-        display dialog "配置完成。助手当前空闲，防护未开启。\n\n接下来打开 App，按首次引导填写自己的网络信息。" buttons {"完成", "打开 Claude Guard"} default button "打开 Claude Guard"
+        display dialog "配置完成。助手当前空闲，防护未开启。\n\n接下来打开 App，在网络设置选择并登记当前代理配置，再填写并确认网络信息。" buttons {"完成", "打开 Claude Guard"} default button "打开 Claude Guard"
         if button returned of result is "打开 Claude Guard" then
             try
                 do shell script "/usr/bin/open /Applications/ClaudeSafeLauncher.app"

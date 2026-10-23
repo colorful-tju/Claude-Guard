@@ -8,8 +8,9 @@ public struct Settings: Codable, Sendable {
     public var confirmationFingerprint:String=""
     public init() {}
 }
-public enum GuardOperation:String,Codable,Sendable {case refreshClaudeRegistration,selfTest,progress,status,inspect,verify,start,stop,shutdown,heartbeat,export,ipv6Off,ipv6Automatic,ipv6Restore}
+public enum GuardOperation:String,Codable,Sendable {case registerProxyConfiguration,refreshClaudeRegistration,selfTest,progress,status,inspect,verify,start,stop,shutdown,heartbeat,export,ipv6Off,ipv6Automatic,ipv6Restore}
 public struct Request:Codable,Sendable {
+    public var configurationPath:String?
     public var operation:GuardOperation;public var settings:Settings?
     public var id:String=UUID().uuidString;public var protocolVersion:Int=BuildIdentity.protocolVersion
     public init(_ operation:GuardOperation,settings:Settings?=nil){self.operation=operation;self.settings=settings}
@@ -50,6 +51,8 @@ public struct Status:Codable,Sendable {
     public var country:String="未核验",ipv6:String="未核验",udp:String="OFF",monitor:String="未启动（有限观测）"
     public var flclash:Bool=false,claude:Bool=false,verified:Bool=false
     public var fingerprint:String="",report:String="",refreshedAt:String=""
+    public var configurationPath:String?
+    public var configurationError:String?
     public var claudeRegistrationRequired:Bool?
     public var claudeKnown:Bool?
     public var processInventoryComplete:Bool=false,processWarning:String=""
@@ -119,7 +122,7 @@ public enum Wire {
     }
     static func responseTimeout(for operation:GuardOperation)->TimeInterval {
         if [.start,.verify,.stop,.shutdown].contains(operation){return 90}
-        if operation == .refreshClaudeRegistration{return 60}
+        if [.refreshClaudeRegistration,.registerProxyConfiguration].contains(operation){return 60}
         if operation == .selfTest{return 15} // 8s worker + 2s curl + cleanup and reply margin.
         return 8
     }

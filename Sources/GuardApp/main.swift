@@ -97,7 +97,7 @@ private struct WelcomeView:View {
     private let descriptions=[
         "启动器先验证代理出口与防护，再启动 Claude。IP 匹配只是其中一项检查。当前仍是本机测试版，首次通过图形程序完成管理员授权。",
         "由你手动启动已登记的兼容代理核心、选择 HTTP 节点并开启 TUN。启动器不会切换代理。若主页面提醒存在 IPv6 默认路由，先退出 Claude/Code，再点击临时关闭 IPv6。",
-        "下一步进入网络设置。点击重新检测配置可为首次空白网关填入当前候选；你需要核对服务商提供的网关、端口和预期出口。内置 IP 检测只能辅助填写预期出口，不能推断网关或端口。",
+        "下一步进入网络设置，先选择并登记当前使用的单节点 HTTP 配置。成功后填入候选网关；你需要核对服务商提供的网关、端口和预期出口。内置 IP 检测只能辅助填写预期出口，不能推断网关或端口。",
         "关闭主窗口后，菜单栏与防护继续运行。菜单栏的「恢复并退出」会先结束受保护的 Claude/Code、恢复本工具设置再退出；恢复失败会留在应用中。配置会记住，防护不会自动开启。"
     ]
     var body:some View {
@@ -296,6 +296,14 @@ private struct LauncherView:View {
     private var network:some View {
         VStack(alignment:.leading,spacing:22) {
             HStack{Text("修改即保存；每次启动仍重新验证，不自动开启防护。").font(.caption).foregroundStyle(.secondary);Spacer();Button("使用引导"){showWelcome=true}.disabled(model.busy || model.state.phase != "off")}
+            card("已登记代理配置",icon:"doc.text") {
+                Text(model.state.configurationPath.flatMap{$0.isEmpty ? nil:$0} ?? "尚未登记：请选择当前使用的配置")
+                    .font(.caption.monospaced()).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)
+                Text("不要选旧订阅或仅为通过检查导出的文件。配置登记只提供候选节点，实际 Core/网关/TUN/出口仍须验证。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("选择并登记配置…"){model.chooseProxyConfiguration()}.buttonStyle(.borderedProminent)
+                    .disabled(model.busy || model.state.phase != "off")
+            }
             card("代理端点",icon:"server.rack") {
                 Text("首次使用不预填地址。网关 / 端口来自代理服务商；公网 IP 检测只能辅助填写预期出口。").font(.caption).foregroundStyle(.secondary)
                 HStack {

@@ -16,6 +16,14 @@ do {
         }
         timer.cancel();print("Timer self-test passed (3 off-main ticks); no privileged operations");exit(0)
     }
+    // Read-only staging check must work before installation creates the private
+    // root and while an existing daemon still owns its lock. Never take its lock.
+    if args.count==3,args[0]=="--check-config",let uid=UInt32(args[1]),uid>=501 {
+        guard geteuid()==0 || geteuid()==uid else{throw fail("Configuration check owner mismatch")}
+        let script=URL(fileURLWithPath:CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("read-node.rb").path
+        _=try ProxyConfiguration.candidate(path:args[2],uid:uid,commands:Commands(),script:script)
+        print("代理配置格式检查通过；运行态尚未验证");exit(0)
+    }
     guard geteuid()==0 else{throw fail("GuardDaemon requires administrator installation; do not run via UI as root")}
     var st=stat();guard lstat(Paths.root,&st)==0,st.st_uid==0,(st.st_mode&S_IFMT)==S_IFDIR,(st.st_mode&0o022)==0 else{throw fail("Private root directory is not trustworthy")}
     let lockfd=open(Paths.root+"/daemon.lock",O_RDWR|O_CREAT|O_NOFOLLOW,0o600)
@@ -23,8 +31,9 @@ do {
     if [2,4].contains(args.count),args[0]=="--register",let uid=UInt32(args[1]),uid>=501,let pwd=getpwuid(uid) {
         guard !FileManager.default.fileExists(atPath:Paths.root+"/ipv6-override.json"), !FileManager.default.fileExists(atPath:Paths.root+"/session.json") else{throw fail("Recover active session before updating")}
         let corePath=args.count==4 ? args[2]:"/Applications/FlClash.app/Contents/MacOS/FlClashCore"
-        let configPath=args.count==4 ? args[3]:String(cString:pwd.pointee.pw_dir)+"/Library/Application Support/com.follow.clash/config.yaml"
-        guard corePath.hasPrefix("/"),configPath.hasPrefix("/"), !corePath.contains("\n"), !configPath.contains("\n") else{throw fail("Proxy registration requires absolute paths")}
+        let configPath=args.count==4 ? args[3]:""
+        guard corePath.hasPrefix("/"),(configPath.isEmpty || configPath.hasPrefix("/")), !corePath.contains("\n"), !configPath.contains("\n") else{throw fail("Proxy registration requires absolute paths")}
+        if !configPath.isEmpty {_=try ProxyConfiguration.candidate(path:configPath,uid:uid,commands:Commands())}
         var install=Installation(uid:uid,home:String(cString:pwd.pointee.pw_dir),clients:[try codeHash(path:Paths.app+"/Contents/MacOS/ClaudeSafeLauncher"),try codeHash(path:Paths.app+"/Contents/Resources/guardctl")],coreHash:try codeHash(path:corePath),flclashHash:"",claudeHash:try codeHash(path:"/Applications/Claude.app"))
         install.proxyCorePath=corePath;install.proxyConfigPath=configPath
         try PrivateFiles.write(install,to:Paths.root+"/installation.json");print("Registered UID and signed build identities; no PF or network changes")
@@ -63,7 +72,7 @@ do {
                         var timeout=timeval(tv_sec:5,tv_usec:0);setsockopt(client,SOL_SOCKET,SO_RCVTIMEO,&timeout,socklen_t(MemoryLayout<timeval>.size));setsockopt(client,SOL_SOCKET,SO_SNDTIMEO,&timeout,socklen_t(MemoryLayout<timeval>.size))
                         let request=try JSONDecoder().decode(Request.self,from:Wire.read(client))
                         guard request.protocolVersion==BuildIdentity.protocolVersion,UUID(uuidString:request.id) != nil else{throw fail("IPC protocol mismatch")}
-                        if [.refreshClaudeRegistration,.heartbeat,.selfTest,.start,.verify,.ipv6Off,.ipv6Automatic,.ipv6Restore].contains(request.operation) {
+                        if [.registerProxyConfiguration,.refreshClaudeRegistration,.heartbeat,.selfTest,.start,.verify,.ipv6Off,.ipv6Automatic,.ipv6Restore].contains(request.operation) {
                             guard try guestHash(token:Data(token))==install.clients.first else{throw fail("Only the registered desktop UI may start or keep a session alive")}
                         }
                         if request.operation == .heartbeat {
@@ -76,10 +85,10 @@ do {
                             try Wire.write(JSONEncoder().encode(reply),client);return
                         }
                         let ticket=admission.ticket()
-                        if [.refreshClaudeRegistration,.selfTest,.start,.verify,.ipv6Off,.ipv6Automatic,.ipv6Restore].contains(request.operation){try controller.heartbeat(clientPID:pid)}
+                        if [.registerProxyConfiguration,.refreshClaudeRegistration,.selfTest,.start,.verify,.ipv6Off,.ipv6Automatic,.ipv6Restore].contains(request.operation){try controller.heartbeat(clientPID:pid)}
                         if [.stop,.shutdown].contains(request.operation){admission.cancelPendingStarts();controller.requestStop(restoreIPv6:request.operation == .shutdown)}
                         var reply=queue.sync{ ()->Reply in
-                            if [.refreshClaudeRegistration,.selfTest,.start,.verify,.ipv6Off,.ipv6Automatic,.ipv6Restore].contains(request.operation),!admission.accepts(ticket){return Reply(ok:false,status:controller.status,error:"Queued start cancelled by OFF")}
+                            if [.registerProxyConfiguration,.refreshClaudeRegistration,.selfTest,.start,.verify,.ipv6Off,.ipv6Automatic,.ipv6Restore].contains(request.operation),!admission.accepts(ticket){return Reply(ok:false,status:controller.status,error:"Queued start cancelled by OFF")}
                             return controller.handle(request)
                         };reply.requestID=request.id
                         try Wire.write(JSONEncoder().encode(reply),client)

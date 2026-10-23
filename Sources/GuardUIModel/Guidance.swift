@@ -7,6 +7,10 @@ public struct Guidance:Equatable {
     public let severe:Bool
     public init(_ category:String,_ title:String,_ action:String,severe:Bool=false){self.category=category;self.title=title;self.action=action;self.severe=severe}
     public static func reason(_ raw:String)->Guidance {
+        if raw.contains("Proxy configuration:") {
+            let detail=raw.components(separatedBy:"Proxy configuration:").last?.trimmingCharacters(in:.whitespacesAndNewlines) ?? raw
+            return .init("配置需要处理",detail,"保持 OFF，在「网络设置 → 选择并登记配置」核对路径。选择当前使用的单节点 HTTP 配置，再确认端点并验证。")
+        }
         if raw.contains("Claude build changed") {return .init("Claude 已更新","Claude 版本与登记信息不一致","退出 Claude/Code 并确认防护 OFF，在弹窗点击「验证并重新登记 Claude」，然后重新安全启动。")}
         if raw.contains("Claude registration") {return .init("登记未完成","Claude 重新登记未完成",raw)}
         if raw.contains("Startup validation retry exhausted") {

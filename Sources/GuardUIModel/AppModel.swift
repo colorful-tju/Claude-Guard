@@ -156,10 +156,12 @@ import GuardCore
             }
         }
     }
-    @discardableResult public func request(_ operation:GuardOperation)->Task<Void,Never>? {
+    @discardableResult public func request(_ operation:GuardOperation,configurationPath:String?=nil)->Task<Void,Never>? {
         if [.stop,.shutdown].contains(operation) {guard !stopping else{return nil};stopping=true}
         else {guard !busy else{return nil}}
-        if operation == .refreshClaudeRegistration {guard state.phase=="off" else{return nil}}
+        if [.refreshClaudeRegistration,.registerProxyConfiguration].contains(operation) {guard state.phase=="off" else{return nil}}
+        // Clear before transport: commit may succeed even if its reply is lost or superseded by OFF.
+        if operation == .registerProxyConfiguration {confirmation=false}
         if [.start,.verify].contains(operation) {
             guard state.phase=="off" else{return nil}
             if needsIPv6Off {failure="IPv6 default route detected";return nil}
@@ -170,7 +172,8 @@ import GuardCore
         else if [.start,.verify].contains(operation){state.phase="checking"}
         var saved=settings;saved.providerConfirmed=confirmation;saved.confirmationFingerprint=state.fingerprint
         saveSettings()
-        let request=Request(operation,settings:saved),call=transport
+        var request=Request(operation,settings:saved);request.configurationPath=configurationPath
+        let call=transport
         return Task.detached{[weak self] in
             do {
                 let reply=try call(request)
@@ -178,6 +181,13 @@ import GuardCore
                     guard let self,version==self.revision else{return}
                     if [.stop,.shutdown].contains(operation),reply.ok {self.acknowledgeInterruption()}
                     self.state=reply.status;self.failure=reply.error ?? "";self.busy=false;self.stopping=false
+                    if operation == .registerProxyConfiguration {
+                        self.confirmation=false
+                        if reply.ok {
+                            let endpoint=reply.status.gateway.split(separator:":")
+                            if endpoint.count==2,let port=UInt16(endpoint[1]) {self.settings.gateway=String(endpoint[0]);self.settings.port=port}
+                        }
+                    }
                     if operation == .start,reply.status.claudeRegistrationRequired==true {self.registrationAlert=true}
                     if operation == .refreshClaudeRegistration {
                         self.registrationAlert = !reply.ok
@@ -218,10 +228,16 @@ import GuardCore
             }
         }
     }
+    public func chooseProxyConfiguration() {
+        guard !busy,state.phase=="off" else{return}
+        let panel=NSOpenPanel();panel.canChooseFiles=true;panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
+        panel.message="选择当前代理使用的单节点 HTTP 配置。不会切换订阅；安全启动还会核验 Core、网关连接、TUN 与出口。"
+        if panel.runModal() == .OK,let url=panel.url {request(.registerProxyConfiguration,configurationPath:url.path)}
+    }
     public func export() {
         let panel=NSSavePanel();panel.nameFieldStringValue="ClaudeGuard反馈.json";panel.allowedContentTypes=[.json]
         if panel.runModal() == .OK,let url=panel.url {
-            do{let enc=JSONEncoder();enc.outputFormatting=[.prettyPrinted,.sortedKeys];var data=try JSONSerialization.jsonObject(with:enc.encode(state)) as! [String:Any];data["uiHeartbeat"]=try JSONSerialization.jsonObject(with:enc.encode(heartbeat.snapshot()));data["communicationWarning"]=communicationWarning;if let ipCheck {data["ipTest"]=try JSONSerialization.jsonObject(with:enc.encode(ipCheck));data["ipTestStale"]=ipStale};try JSONSerialization.data(withJSONObject:data,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic)}catch{failure="报告保存失败"}
+            do{let enc=JSONEncoder();enc.outputFormatting=[.prettyPrinted,.sortedKeys];var data=try JSONSerialization.jsonObject(with:enc.encode(state)) as! [String:Any];data["uiHeartbeat"]=try JSONSerialization.jsonObject(with:enc.encode(heartbeat.snapshot()));data["communicationWarning"]=communicationWarning;data["operationError"]=failure;if let ipCheck {data["ipTest"]=try JSONSerialization.jsonObject(with:enc.encode(ipCheck));data["ipTestStale"]=ipStale};try JSONSerialization.data(withJSONObject:data,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic)}catch{failure="报告保存失败"}
         }
     }
 }

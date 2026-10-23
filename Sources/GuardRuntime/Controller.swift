@@ -23,6 +23,7 @@ public final class Controller: @unchecked Sendable {
     private var launched=false;private var egressMonitor:EgressMonitor?
     private var logHealthy=true
     private var restartWorkersUnproven=false
+    private var registrationUncertain=false
     private var baselineRoutes=""
     private var previousHealthy:LocalSnapshot?
     private var previousRoutes:String?
@@ -35,6 +36,7 @@ public final class Controller: @unchecked Sendable {
     public convenience init(installation:Installation) throws {try self.init(installation:installation,effects:ControllerEffects.live(installation))}
     init(installation:Installation,effects:ControllerEffects) throws {
         self.installation=installation;self.effects=effects;commands=effects.commands;pf=effects.pf;inspector=effects.inspector;storage=effects.storage;activity=ControllerActivity(clock:effects.clock)
+        status.configurationPath=installation.registeredConfigPath
         if storage.exists("session.json") {
             do {journal=try storage.readJournal()}
             catch {try? effects.terminateClaude();throw fail("Private recovery journal unreadable; Claude termination attempted, restrictions not removed")}
@@ -108,8 +110,9 @@ public final class Controller: @unchecked Sendable {
     }
     private func persist() throws {if let journal{try storage.writeJournal(journal)}}
     public func inspect() throws {
+        try requireRegistrationConsistent()
         guard journal == nil else{return} // Active UI requests only read the last monitor result.
-        let n=try inspector.node();status.gateway="\(n.server):\(n.port)";status.fingerprint=n.fingerprint
+        let n=try inspector.node();status.configurationError=nil;status.gateway="\(n.server):\(n.port)";status.fingerprint=n.fingerprint
         let inventory=effects.inventory()
         try status.applyPreview(inventory,uid:installation.uid,allowPartial:journal == nil || status.phase=="recoveryBlocked",known:previousHealthy?.claudeProcesses ?? [],corePath:installation.registeredCorePath)
         status.message="配置候选已读取；运行态和出口仍需验证"
@@ -134,6 +137,7 @@ public final class Controller: @unchecked Sendable {
         return s
     }
     public func begin(_ settings:Settings,launch:Bool) throws {
+        try requireRegistrationConsistent()
         guard journal==nil,status.phase=="off" else{throw fail("Stop or recover the previous session first")}
         self.settings=settings;inventoryReview=InventoryReview();egressMonitor=nil;status.periodicEgress=nil;status.egressWarning=nil;status.egressRechecking=false;blockedStatistics=nil;status.blockedPackets=nil;status.blockedPacketsAt=nil;status.blockedPacketsIssue=nil;launched=false;heartbeatWasDelayed=false;lastMonitorAt=nil;lastMonitorInterval=nil;status.heartbeatDiagnostic=nil;logHealthy=true;status.verified=false;status.phase="checking"
         do {
@@ -556,7 +560,49 @@ public final class Controller: @unchecked Sendable {
             log(status.message);throw error
         }
     }
+    private func requireRegistrationConsistent() throws {
+        guard !registrationUncertain else{throw fail("Proxy configuration: 登记写入及恢复未能核验；请重新运行安装器，暂不可继续验证或启动")}
+    }
+    private func persistRegistration(_ updated:Installation) throws {
+        do {try effects.persistInstallation(updated)}
+        catch {
+            // Atomic rename can succeed before fsync/readback fails. Restore and verify the
+            // complete old record before permitting further use of the old in-memory identity.
+            do {try effects.persistInstallation(installation)}
+            catch {
+                registrationUncertain=true;settings=nil;status.verified=false;status.fingerprint="";status.gateway=""
+                status.configurationError="Proxy configuration: 登记写入及恢复未能核验；请重新运行安装器"
+                status.message=status.configurationError!
+                log("registration persistence and rollback unverified; further validation disabled")
+                try requireRegistrationConsistent()
+            }
+            throw fail("Proxy configuration: 登记写入未完成；旧登记已恢复并核验，请重试或导出反馈")
+        }
+    }
+    private func registerProxyConfiguration(_ path:String) throws {
+        try requireRegistrationConsistent()
+        guard journal==nil,status.phase=="off",!storage.exists("session.json"),!storage.exists("enable-result.txt"),
+              try pf.canonical().trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{throw fail("Proxy configuration: 必须先完成 OFF/恢复，才能重新登记")}
+        try ProxyConfiguration.validatePath(path)
+        try requireActive();try effects.assertQuiescent()
+        let first=try inspector.configuration(path:path)
+        try requireActive();try effects.assertQuiescent()
+        let final=try inspector.configuration(path:path)
+        guard final.fingerprint==first.fingerprint else{throw fail("Proxy configuration: 配置在登记期间发生变化，请重试")}
+        guard journal==nil,status.phase=="off",!storage.exists("session.json"),!storage.exists("enable-result.txt"),
+              try pf.canonical().trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{throw fail("Proxy configuration: OFF 状态已变化")}
+        try requireActive()
+        var updated=installation;updated.proxyConfigPath=path
+        try persistRegistration(updated)
+        installation=updated;inspector.adoptConfiguration(path:path)
+        settings=nil;status.configurationPath=path;status.configurationError=nil
+        status.gateway="\(final.server):\(final.port)";status.fingerprint=final.fingerprint
+        status.verified=false;status.egress="";status.lastRisk=""
+        status.message="配置已登记；请核对端点并重新验证。尚未确认 Core 正在使用该节点。"
+        log("proxy configuration registered; candidate only; runtime/PF/egress still required")
+    }
     private func refreshClaudeRegistration() throws {
+        try requireRegistrationConsistent()
         guard journal==nil,status.phase=="off",!storage.exists("session.json"),!storage.exists("enable-result.txt"),
               try pf.canonical().trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {
             throw fail("Claude registration: 请先关闭防护并完成恢复，再重新登记")
@@ -574,7 +620,7 @@ public final class Controller: @unchecked Sendable {
               try pf.canonical().trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{throw fail("Claude registration: 防护资产变化，未更新登记")}
         try requireActive()
         var updated=installation;updated.claudeHash=newHash
-        try effects.persistInstallation(updated)
+        try persistRegistration(updated)
         installation=updated
         status.claudeRegistrationRequired=false;status.lastRisk="";status.interruption=nil
         status.message="Claude 官方签名已验证，登记已更新。请重新点击「安全启动 Claude」。"
@@ -587,6 +633,9 @@ public final class Controller: @unchecked Sendable {
                 if journal != nil {return .init(ok:true,status:status)}
                 let inventory=effects.inventory()
                 try status.applyPreview(inventory,uid:installation.uid,allowPartial:journal == nil || status.phase=="recoveryBlocked",known:previousHealthy?.claudeProcesses ?? [],corePath:installation.registeredCorePath)
+            case .registerProxyConfiguration:
+                guard let path=request.configurationPath else{throw ProxyConfigurationFailure(code:"path",count:nil)}
+                try registerProxyConfiguration(path)
             case .refreshClaudeRegistration:
                 do {try refreshClaudeRegistration()}
                 catch {throw fail("Claude registration: " + String(describing:error))}
@@ -610,6 +659,11 @@ public final class Controller: @unchecked Sendable {
             return .init(ok:true,status:status)
         }catch{
             let original=String(describing:error)
+            if request.operation == .inspect || request.operation == .registerProxyConfiguration {
+                status.configurationError=original
+                if request.operation == .inspect {status.fingerprint="";status.gateway=""}
+                log("configuration operation failed: "+original)
+            }
             return .init(ok:false,status:status,error:original)
         }
     }

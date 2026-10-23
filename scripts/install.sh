@@ -16,7 +16,7 @@ helper="/Library/PrivilegedHelperTools/$label"
 plist="/Library/LaunchDaemons/$label.plist"
 [[ ! -L "$root" && ! -L "$app" && ( ! -e "$root" || -d "$root" ) ]] || { echo '拒绝不可信安装目标'; exit 2; }
 [[ ! -e "$root/ipv6-override.json" && ! -L "$root/ipv6-override.json" && ! -e "$root/session.json" && ! -L "$root/session.json" ]] || { echo '存在安全事务，请先关闭安全模式或完成紧急恢复，不能更新。'; exit 2; }
-archive="$PWD/dist/ClaudeSafeLauncher-0.5.18-test.zip"
+archive="$PWD/dist/ClaudeSafeLauncher-0.5.19-test.zip"
 [[ -f "$archive" && ! -L "$archive" ]] || { echo '安装资源缺失，请重新获取完整磁盘映像。'; exit 2; }
 # Separate from daemon.lock: serialize delivery changes without bypassing the
 # helper's authoritative OFF assertion under the daemon transaction lock.
@@ -110,6 +110,9 @@ proxy_core="${1:-/Applications/FlClash.app/Contents/MacOS/FlClashCore}"
 [[ "$proxy_core" == /* ]] || { echo '核心路径必须为绝对路径'; exit 2; }
 if [[ "$#" -eq 2 ]]; then
   [[ "$2" == /* && -f "$2" && ! -L "$2" ]] || { echo '配置必须是普通文件的绝对路径'; exit 2; }
+fi
+if [[ "$#" -eq 2 ]]; then
+  "$source_app/Contents/Resources/guard-daemon" --check-config "$user_id" "$2"
 fi
 for dependency in '/Applications/Claude.app' "$proxy_core"; do
   /usr/bin/codesign --verify --strict "$dependency"

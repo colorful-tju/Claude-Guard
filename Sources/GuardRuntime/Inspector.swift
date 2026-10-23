@@ -10,17 +10,18 @@ public struct RuntimeEvidence:Sendable {
     public var routeFingerprint:String;public var routeDetail:String;public var epoch:UInt64;public var claude:[ProcessIdentity]
 }
 public final class Inspector: @unchecked Sendable {
-    private let nodeCache=VerifiedNodeCache()
+    private var nodeCache=VerifiedNodeCache()
     private(set) var trackedClaude:[ProcessIdentity]=[]
-    public let installation:Installation;public let commands:Commands;public let events:NetworkEvents
+    public private(set) var installation:Installation;public let commands:Commands;public let events:NetworkEvents
     public init(_ installation:Installation,commands:Commands,events:NetworkEvents){self.installation=installation;self.commands=commands;self.events=events}
     public func node() throws -> NodeConfiguration {
         let file=installation.registeredConfigPath
-        return try nodeCache.read(readBytes:{try VerifiedNodeCache.bytes(path:file,owner:self.installation.uid)},parse:{ bytes in
-            let result=try self.commands.checked("/usr/bin/ruby",[Paths.root+"/read-node.rb","--stdin"],input:bytes)
-            return try NodeConfiguration.parse(Data(result.utf8))
+        return try nodeCache.read(readBytes:{try ProxyConfiguration.bytes(path:file,uid:self.installation.uid)},parse:{ bytes in
+            return try ProxyConfiguration.parse(bytes,commands:self.commands)
         })
     }
+    public func configuration(path:String) throws -> NodeConfiguration {try ProxyConfiguration.candidate(path:path,uid:installation.uid,commands:commands)}
+    public func adoptConfiguration(path:String) {installation.proxyConfigPath=path;nodeCache=VerifiedNodeCache()}
     public func runtime(settings:Settings) throws -> RuntimeEvidence {try collect(settings:settings,monitoring:false)}
     public func monitoringRuntime(settings:Settings) throws -> RuntimeEvidence {try collect(settings:settings,monitoring:true)}
     private func collect(settings:Settings,monitoring:Bool) throws -> RuntimeEvidence {

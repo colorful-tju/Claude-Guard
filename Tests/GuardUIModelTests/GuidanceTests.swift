@@ -64,3 +64,10 @@ struct ClaudeUpdateGuidanceTests {
         #expect(message.title.contains("Claude") && message.action.contains("重新登记"))
     }
 }
+
+struct ProxyConfigurationGuidanceTests {
+    @Test func pointsToConfigurationSelection() {
+        let guidance=Guidance.reason("Proxy configuration: 读取到 22 个节点")
+        #expect(guidance.title.contains("22") && guidance.action.contains("选择并登记配置"))
+    }
+}

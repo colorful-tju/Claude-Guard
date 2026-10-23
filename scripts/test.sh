@@ -21,6 +21,7 @@ swift build --product guard-simulation
 .build/debug/guard-simulation
 swift build --product guard-daemon
 .build/debug/guard-daemon --self-test-timer
+python3 scripts/test-config-preflight.py
 bash scripts/test-native-process.sh
 bash scripts/test-deleted-executable.sh
 python3 scripts/test-pf-capture.py

@@ -18,6 +18,8 @@ public protocol PacketFiltering: Sendable {
     func release(_ token:String) throws
 }
 public protocol RuntimeInspecting: Sendable {
+    func configuration(path:String) throws -> NodeConfiguration
+    func adoptConfiguration(path:String)
     func node() throws -> NodeConfiguration
     func runtime(settings:Settings) throws -> RuntimeEvidence
     func monitoringRuntime(settings:Settings) throws -> RuntimeEvidence

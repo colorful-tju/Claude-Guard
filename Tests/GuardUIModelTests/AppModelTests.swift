@@ -170,3 +170,44 @@ struct ClaudeRegistrationUITests {
         #expect(model.request(.refreshClaudeRegistration)==nil)
     }
 }
+
+struct ProxyRegistrationUITests {
+    @Test @MainActor func lostRegistrationReplyDoesNotReuseOldConfirmationAfterPolling() async throws {
+        let model=AppModel(autoPoll:false,preferences:nil,transport:{request in
+            if request.operation == .registerProxyConfiguration {throw fail("reply lost after commit")}
+            var s=Status();s.configurationPath="/new.yaml";s.fingerprint="new";s.gateway="1.2.3.4:8080"
+            return .init(ok:true,status:s)
+        })
+        model.confirmation=true;model.state.fingerprint="old"
+        await model.request(.registerProxyConfiguration,configurationPath:"/new.yaml")?.value
+        model.poll()
+        for _ in 0..<200 where model.state.fingerprint != "new" {try await Task.sleep(for:.milliseconds(2))}
+        #expect(model.state.fingerprint=="new" && !model.confirmation)
+    }
+    @Test @MainActor func OFFCannotLeaveOldConfirmationWhenRegistrationReplyIsSuperseded() async throws {
+        let release=DispatchSemaphore(value:0)
+        let model=AppModel(autoPoll:false,preferences:nil,transport:{request in
+            if request.operation == .registerProxyConfiguration {
+                guard release.wait(timeout:.now()+8) == .success else{throw fail("fixture timeout")}
+            }
+            return .init(ok:true,status:Status())
+        })
+        model.confirmation=true
+        let pending=try #require(model.request(.registerProxyConfiguration,configurationPath:"/new.yaml"))
+        await model.request(.stop)?.value
+        release.signal();await pending.value
+        #expect(!model.confirmation && !model.busy)
+    }
+    @Test @MainActor func registrationClearsConfirmationAndUpdatesCandidateOnly() async {
+        let model=AppModel(autoPoll:false,preferences:nil,transport:{request in
+            #expect(request.operation == .registerProxyConfiguration && request.configurationPath=="/Users/example/current.yaml")
+            var s=Status();s.configurationPath=request.configurationPath;s.gateway="1.2.3.4:8080";s.fingerprint="new"
+            return .init(ok:true,status:s)
+        })
+        model.confirmation=true
+        await model.request(.registerProxyConfiguration,configurationPath:"/Users/example/current.yaml")?.value
+        #expect(!model.confirmation && model.settings.gateway=="1.2.3.4" && model.settings.port==8080 && !model.state.verified)
+        model.state.phase="armed"
+        #expect(model.request(.registerProxyConfiguration,configurationPath:"/x")==nil)
+    }
+}

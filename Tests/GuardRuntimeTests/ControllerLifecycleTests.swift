@@ -35,7 +35,11 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     var busyWorkers=false,uiPresent=true
     var claude:[ProcessRecord]=[]
     var inventoryIssues:[String]=[]
+    var adoptedPath:String?
+    var configurationReads=0
+    var onConfigurationCheck:(()->Void)?
     var savedInstallation:Installation?
+    var saveOverride:((Installation)throws->Void)?
     var onOfficialCheck:(()->Void)?
     var verifiedClaudeHashes:[String]=[]
     var claudeBuildChanged=false
@@ -57,7 +61,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
             terminateClaude:{[self] in try step("terminate");claude=[]},observeSockets:{[self] policy,_ in try step("sockets");return SocketObservationReport.collect(policy:policy,processes:claude.map(\.identity),readProcess:{pid in try #require(self.claude.first{$0.pid==pid})},readSockets:{_ in self.socketRows})},
             preflightWorker:{[self] _,_ in try step("worker-preflight");return "test-worker"},verifyClaude:{[self] expected in verifiedClaudeHashes.append(expected);try step("verify-app");beforeVerify?();if claudeBuildChanged {throw ClaudeBuildChanged()}},
             officialClaudeHash:{[self] _ in try step("official-claude");onOfficialCheck?();return "updated-claude"},
-            persistInstallation:{[self] updated in try step("save-installation");savedInstallation=updated},
+            persistInstallation:{[self] updated in try step("save-installation");if let saveOverride {try saveOverride(updated)} else {savedInstallation=updated}},
             launchClaude:{[self] cancelled in try step("launch");if cancelled(){throw fail("cancelled launch")};launches += 1;onLaunch?()},
             runProbes:{[self] policy,baseline,startedAt,record,cancelled in
                 try step("probes");beforeProbe?();if cancelled(){throw fail("cancelled probes")};try record("fake probe complete")
@@ -68,6 +72,8 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
             },healthProbe:{[self] _ in if let healthOverride{return try healthOverride()};throw fail("Injected echo failure")},assertQuiescent:{[self] in try step("quiescent");if busyWorkers{throw fail("workers active")}},boot:{"00000000-0000-0000-0000-000000000001"},ipv6:ipv6)
         let value=try Controller(installation:installation,effects:effects);controller=value;return value
     }
+    func configuration(path:String) throws -> NodeConfiguration {try step("candidate");configurationReads+=1;onConfigurationCheck?();var result=try node();if failure=="changed" && configurationReads>1 {result.fingerprint="changed"};return result}
+    func adoptConfiguration(path:String) {adoptedPath=path}
     func node() throws -> NodeConfiguration {.init(name:"Webshare-Canada",type:"http",server:"23.20.10.8",port:5376,fingerprint:"config",numeric:true,tunDevice:"utun4")}
     func runtime(settings:Settings) throws -> RuntimeEvidence {
         try step("runtime")
@@ -938,5 +944,67 @@ struct ClaudeRegistrationLifecycleTests {
             #expect(!c.handle(.init(.refreshClaudeRegistration)).ok)
             #expect(c.installation.claudeHash=="claude" && f.savedInstallation==nil)
         }
+    }
+}
+
+struct ProxyRegistrationLifecycleTests {
+    @Test func postCommitFailureRestoresOldDiskAndMemoryRegistration() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        var writes=0
+        f.saveOverride={updated in
+            writes+=1;f.savedInstallation=updated
+            if writes==1 {throw fail("Injected failure after rename")}
+        }
+        var request=Request(.registerProxyConfiguration);request.configurationPath="/Users/example/new.yaml"
+        let reply=c.handle(request)
+        #expect(!reply.ok && writes==2 && f.savedInstallation==f.installation)
+        #expect(c.installation==f.installation && f.adoptedPath==nil)
+        #expect(c.handle(.init(.inspect)).ok)
+    }
+    @Test func failedRollbackBlocksFurtherRegistrationAndProtectionWithoutPFChanges() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        var writes=0
+        f.saveOverride={updated in
+            writes+=1
+            if writes==1 {f.savedInstallation=updated}
+            throw fail("Injected uncertain persistence")
+        }
+        var request=Request(.registerProxyConfiguration);request.configurationPath="/Users/example/new.yaml"
+        let reply=c.handle(request)
+        #expect(!reply.ok && writes==2 && reply.error?.contains("重新运行安装器")==true)
+        #expect(!c.handle(.init(.inspect)).ok && !c.handle(request).ok && !c.handle(.init(.refreshClaudeRegistration)).ok)
+        #expect(throws:(any Error).self) {try c.begin(f.settings,launch:false)}
+        #expect(!f.calls.contains("activate") && !f.calls.contains("launch") && !f.calls.contains("terminate"))
+        #expect(c.handle(.init(.status)).ok && c.handle(.init(.export)).ok)
+    }
+    @Test func onlyConfigPathChangesNoNetworkAndCandidateNotVerified() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        var request=Request(.registerProxyConfiguration);request.configurationPath="/Users/example/current.yaml"
+        let reply=c.handle(request)
+        var expected=f.installation;expected.proxyConfigPath=request.configurationPath
+        #expect(reply.ok && reply.status.phase=="off" && !reply.status.verified)
+        #expect(c.installation==expected && f.savedInstallation==expected && f.adoptedPath==request.configurationPath)
+        #expect(f.configurationReads==2 && !f.calls.contains("activate") && !f.calls.contains("launch") && !f.calls.contains("terminate"))
+    }
+    @Test func invalidSaveCancellationAndActiveProtectionPreserveOldRegistration() throws {
+        for reason in ["candidate","save-installation","cancel","active","rules","changed"] {
+            let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+            if reason=="active" {try c.begin(f.settings,launch:false)}
+            if reason=="rules" {f.rules="unknown"}
+            if reason=="cancel" {f.onConfigurationCheck={c.requestStop()}}
+            f.failure=reason
+            var request=Request(.registerProxyConfiguration);request.configurationPath="/Users/example/current.yaml"
+            #expect(!c.handle(request).ok)
+            #expect(c.installation==f.installation && f.savedInstallation==nil && f.adoptedPath==nil)
+            if reason=="active" {#expect(c.status.phase=="armed" && f.reference)}
+        }
+    }
+    @Test func inspectErrorPersistsInExportWithoutClaimingVerified() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        f.failure="candidate"
+        var request=Request(.registerProxyConfiguration);request.configurationPath="/Users/example/current.yaml"
+        #expect(!c.handle(request).ok)
+        let report=c.handle(.init(.export))
+        #expect(report.status.configurationError != nil && !report.status.report.isEmpty && !report.status.verified)
     }
 }
