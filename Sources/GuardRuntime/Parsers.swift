@@ -33,9 +33,9 @@ public enum PFText {
         }
         return rows.sorted{$0.token<$1.token}
     }
-    public static func foreignImage(main:String,nat:String,parent:String,children:[String]) -> String {
+    public static func foreignImage(main:String,nat:String,parent:String,children:[String],sharing:String?=nil) -> String {
         let foreign=children.filter{$0 != "000.local.claudesafelauncher"}.sorted().joined(separator:"\n")
-        return main+"\n-- NAT --\n"+nat+"\n-- Apple parent --\n"+parent+"\n-- Apple children --\n"+foreign
+        return main+"\n-- NAT --\n"+nat+"\n-- Apple parent --\n"+parent+"\n-- Apple children --\n"+foreign+(sharing.map{"\n-- Empty sharing tree --\n"+$0} ?? "")
     }
     public static func anchorNames(_ text:String,parent:String) throws -> [String] {
         var names:[String]=[]
@@ -71,7 +71,7 @@ public enum PFText {
         return packets
     }
     public static func environment(main: String, siblings: String, skipped: String,
-                                   appleRules:String="",appleNAT:String="",appleChildren:[String:PFAnchorContents]=[:]) throws {
+                                   appleRules:String="",appleNAT:String="",appleChildren:[String:PFAnchorContents]=[:],sharingEmpty:Bool=false) throws {
         let lines = main.components(separatedBy:.newlines).map { $0.trimmingCharacters(in:.whitespaces) }.filter { !$0.isEmpty }
         let names=try anchorNames(siblings,parent:"com.apple")
         let placeholders:Set<String>=["200.AirDrop","250.ApplicationFirewall"]
@@ -79,8 +79,9 @@ public enum PFText {
         let parentLines=appleRules.components(separatedBy:.newlines).map{$0.trimmingCharacters(in:.whitespaces)}.filter{!$0.isEmpty}
         let permittedParent:Set<String>=["anchor \"200.AirDrop/*\" all","anchor \"250.ApplicationFirewall/*\" all"]
         let needed=Set(names).intersection(placeholders)
+        let sharingMain:Set<String> = sharingEmpty ? ["anchor \"com.apple.internet-sharing\" all","scrub-anchor \"com.apple.internet-sharing\" all fragment reassemble"]:[]
         guard lines.filter({ $0 == "anchor \"com.apple/*\" all" }).count == 1,
-              lines.allSatisfy({ $0 == "anchor \"com.apple/*\" all" || $0.hasPrefix("scrub-anchor \"com.apple/*\" ") }),
+              lines.allSatisfy({ $0 == "anchor \"com.apple/*\" all" || $0.hasPrefix("scrub-anchor \"com.apple/*\" ") || sharingMain.contains($0) }),
               Set(names).isSubset(of:placeholders.union([own])),
               Set(appleChildren.keys)==needed,
               parentLines.allSatisfy({permittedParent.contains($0)}),Set(parentLines).count==parentLines.count,

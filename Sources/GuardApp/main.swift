@@ -28,8 +28,8 @@ final class WindowLifecycle:NSObject,NSApplicationDelegate {
             sample.state.processInventoryComplete=true
             let scenario=CommandLine.arguments.count>3 ? CommandLine.arguments[3]:"empty"
             if scenario=="flclash" {sample.flclashCatalog = .init(entries:[
-                .init(path:"/Users/example/Library/Application Support/com.follow.clash/profiles/123.yaml",name:"Canada HTTP",modifiedAt:Date(),generated:false),
-                .init(path:"/Users/example/Library/Application Support/com.follow.clash/profiles/456.yaml",name:"其他订阅",modifiedAt:Date(),generated:false),
+                .init(path:"/Users/example/Library/Application Support/com.follow.clash/profiles/123.yaml",name:"123.yaml",modifiedAt:Date(),generated:false,summary:.init(nodeCount:1,httpCount:1,providerCount:0,errorCode:nil)),
+                .init(path:"/Users/example/Library/Application Support/com.follow.clash/profiles/456.yaml",name:"456.yaml",modifiedAt:Date(),generated:false,summary:.init(nodeCount:2,httpCount:1,providerCount:1,errorCode:nil)),
                 .init(path:"/Users/example/Library/Application Support/com.follow.clash/config.yaml",name:"生成配置（不保证是当前订阅）",modifiedAt:Date(),generated:true)])}
             sample.testingIP=scenario=="loading"
             if scenario=="armed" {sample.state.phase="armed";sample.state.verified=true;sample.state.claude=true;sample.state.blockedPackets=128}
@@ -78,6 +78,7 @@ private struct MenuStatus:View {
             .onChange(of:model.interruptionAlert?.id){_,id in if id != nil {openWindow(id:"main");NSApp.activate(ignoringOtherApps:true)}}
             .onChange(of:model.egressWarningAlert?.id){_,id in if id != nil {openWindow(id:"main");NSApp.activate(ignoringOtherApps:true)}}
             .onChange(of:model.registrationAlert){_,visible in if visible {openWindow(id:"main");NSApp.activate(ignoringOtherApps:true)}}
+            .onChange(of:model.pfIssueAlert){_,reason in if reason != nil {openWindow(id:"main");NSApp.activate(ignoringOtherApps:true)}}
     }
 }
 private struct GuardMenu:View {
@@ -182,10 +183,14 @@ private struct LauncherView:View {
         .onChange(of:model.interruptionAlert?.id){_,id in if id != nil && !preview {showWelcome=false;NSApp.activate(ignoringOtherApps:true)}}
         .onChange(of:model.egressWarningAlert?.id){_,id in if id != nil && !preview {showWelcome=false;NSApp.activate(ignoringOtherApps:true)}}
         .onChange(of:model.registrationAlert){_,visible in if visible && !preview {showWelcome=false;NSApp.activate(ignoringOtherApps:true)}}
-        .alert(model.registrationAlert ? "Claude 已更新，需要重新登记":model.interruptionAlert != nil ? "启动器自动停止提醒":"出口暂时无法核验",isPresented:Binding(get:{model.registrationAlert || model.interruptionAlert != nil || model.egressWarningAlert != nil},set:{if !$0 {model.acknowledgeVisibleAlert()}})) {
+        .onChange(of:model.pfIssueAlert){_,reason in if reason != nil && !preview {showWelcome=false;NSApp.activate(ignoringOtherApps:true)}}
+        .alert(model.registrationAlert ? "Claude 已更新，需要重新登记":model.interruptionAlert != nil ? "启动器自动停止提醒":model.pfIssueAlert != nil ? "防火墙检查未通过":"出口暂时无法核验",isPresented:Binding(get:{model.registrationAlert || model.interruptionAlert != nil || model.pfIssueAlert != nil || model.egressWarningAlert != nil},set:{if !$0 {model.acknowledgeVisibleAlert()}})) {
             if model.registrationAlert {
                 Button("验证并重新登记 Claude"){model.registrationAlert=false;model.request(.refreshClaudeRegistration)}
                     .disabled(model.busy || model.state.phase != "off")
+            }
+            if !model.registrationAlert,let help=PFDiagnosticHelp(reason:model.interruptionAlert?.reason ?? model.pfIssueAlert ?? "") {
+                Button("复制只读诊断命令"){NSPasteboard.general.clearContents();NSPasteboard.general.setString(help.readOnlyCommand,forType:.string);model.acknowledgeVisibleAlert()}
             }
             Button("查看诊断"){page = .diagnostics;model.acknowledgeVisibleAlert()}
             Button("知道了",role:.cancel){model.acknowledgeVisibleAlert()}
@@ -193,7 +198,9 @@ private struct LauncherView:View {
             if model.registrationAlert {
                 Text("Claude 的构建与原登记不一致，通常由自动更新引起，并不表示 IP 泄漏。\n\n请先退出 Claude 和 Claude Code，确认防护 OFF。点击后将核验 Anthropic 官方签名并更新登记，无需重新安装防护器；不会更改网络设置或自动启动 Claude。\n\n" + (model.state.phase != "off" ? "当前尚未 OFF，请先完成关闭或恢复。\n":"") + (model.failure.contains("Claude registration") ? String(model.failure.prefix(350)):""))
             } else if let event=model.interruptionAlert {
-                Text("\(event.exitConfirmed ? "启动器已主动关闭 Claude。":event.requestedClaudeStop ? "启动器已请求关闭 Claude，但尚未确认全部退出。":"启动器已结束防护验证。")\n\(Guidance.reason(event.reason).title)\n\(Guidance.reason(event.reason).action)\n时间：\(event.timestamp)\n原始原因：\(String(event.reason.prefix(400)))")
+                Text("\(event.exitConfirmed ? "启动器已主动关闭 Claude。":event.requestedClaudeStop ? "启动器已请求关闭 Claude，但尚未确认全部退出。":"启动器已结束防护验证。")\n\(Guidance.reason(event.reason).title)\n\(PFDiagnosticHelp(reason:event.reason)?.steps ?? Guidance.reason(event.reason).action)\n时间：\(event.timestamp)\n原始原因：\(String(event.reason.prefix(400)))")
+            } else if let reason=model.pfIssueAlert,let help=PFDiagnosticHelp(reason:reason) {
+                Text(help.title+"\n\n"+help.steps+"\n\n原始原因："+String(reason.prefix(400)))
             } else if let event=model.egressWarningAlert {
                 Text("两次出口检测均未取得可用结果。Claude 未关闭，PF 与本地防护检查继续运行。当前公网出口尚未确认，不代表检测到 IP 泄漏。\n请检查代理连通性；程序每 5 分钟重测，恢复后自动清除提醒。检测到不同公网 IP 仍会立即关闭 Claude。\n时间：\(event.timestamp)")
             }
@@ -279,7 +286,15 @@ private struct LauncherView:View {
                  .onChange(of:model.state.report){_,_ in reader.scrollTo("tail",anchor:.bottom)}
                 }
             }
-            HStack{Text("实际阶段 · 完整信息可在框内滚动").font(.caption2).foregroundStyle(.secondary);Spacer();Button("复制记录"){NSPasteboard.general.clearContents();NSPasteboard.general.setString([model.state.report,model.failure,model.state.lastRisk,model.state.processWarning].filter{!$0.isEmpty}.joined(separator:"\n"),forType:.string)}}
+            HStack{
+                Text("实际阶段 · 完整信息可在框内滚动").font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                let reason=model.failure.isEmpty ? model.state.lastRisk:model.failure
+                if PFDiagnosticHelp(reason:reason) != nil {
+                    Button("处理方法"){model.pfIssueAlert=reason}
+                }
+                Button("复制记录"){NSPasteboard.general.clearContents();NSPasteboard.general.setString([model.state.report,model.failure,model.state.lastRisk,model.state.processWarning].filter{!$0.isEmpty}.joined(separator:"\n"),forType:.string)}
+            }
         }.padding(16).background(.regularMaterial,in:RoundedRectangle(cornerRadius:18))
     }
     private var ipv6Panel:some View {
@@ -469,6 +484,10 @@ private struct FlClashPicker:View {
                             VStack(alignment:.leading,spacing:5) {
                                 Text(entry.name).font(.headline).lineLimit(2)
                                 Text(entry.generated ? "config.yaml · 可能是旧快照，请核对后再使用":entry.filename).font(.caption.monospaced()).foregroundStyle(.secondary)
+                                if let count=entry.summary.nodeCount,let http=entry.summary.httpCount,let providers=entry.summary.providerCount {
+                                    Text("配置内节点：\(count) · HTTP：\(http)"+(providers>0 ? " · 外部来源：\(providers)（总数未知）":""))
+                                        .font(.caption.weight(.medium)).foregroundStyle(count==1 && http==1 && providers==0 ? .blue:.orange)
+                                } else {Text("节点数量未能预览 · 登记时重新校验").font(.caption).foregroundStyle(.secondary)}
                             }
                             Spacer()
                             Text(entry.modifiedAt.formatted(date:.abbreviated,time:.shortened)).font(.caption).foregroundStyle(.secondary)
@@ -476,7 +495,7 @@ private struct FlClashPicker:View {
                     }.listStyle(.inset).clipShape(RoundedRectangle(cornerRadius:12))
                 }
             } else {Spacer()}
-            Text("仅支持单节点 HTTP 配置；登记时校验文件，安全启动时仍会核验网关、TUN 和出口。")
+            Text("数量仅统计文件内 proxies，不下载外部节点。仅支持单节点 HTTP；预览不代替登记和运行态验证。")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("取消"){dismiss()}.keyboardShortcut(.cancelAction)

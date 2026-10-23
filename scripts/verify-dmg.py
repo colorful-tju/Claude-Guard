@@ -6,7 +6,7 @@ root=Path(__file__).resolve().parent.parent
 arch=sys.argv[1] if len(sys.argv)>1 else 'arm64'
 assert arch in ('arm64','x86_64')
 platform='AppleSilicon' if arch=='arm64' else 'Intel'
-image=root/f'dist/Claude-Guard-0.5.20-macOS-{platform}-{arch}.dmg'
+image=root/f'dist/Claude-Guard-0.5.21-macOS-{platform}-{arch}.dmg'
 def run(*args):return subprocess.run(args,check=True,capture_output=True).stdout
 mount=None
 try:
@@ -16,7 +16,7 @@ try:
         app=mount/(name+'.app')
         run('/usr/bin/codesign','--verify','--strict','--deep',str(app))
         info=plistlib.loads((app/'Contents/Info.plist').read_bytes())
-        assert info['CFBundleShortVersionString']=='0.5.20'
+        assert info['CFBundleShortVersionString']=='0.5.21'
         assert (app/'Contents/Resources/applet.icns').stat().st_size>1000
     assert {p.name for p in mount.iterdir() if not p.name.startswith('.')} == {'双击安装 Claude Guard.app','移除 Claude Guard.app','请先阅读：先卸载旧版再安装新版.txt'}
     remover=mount/'移除 Claude Guard.app'
@@ -35,13 +35,17 @@ try:
     assert (mount/'双击安装 Claude Guard.app/Contents/Resources/Recovery/恢复说明.md').read_bytes()==(root/'docs/完整验证手册.md').read_bytes()
     with tempfile.TemporaryDirectory(prefix='guard-dmg-audit-') as tmp:
         tmp=Path(tmp)
-        run('/usr/bin/ditto','-x','-k',str(payload/'dist/ClaudeSafeLauncher-0.5.20-test.zip'),str(tmp))
+        run('/usr/bin/ditto','-x','-k',str(payload/'dist/ClaudeSafeLauncher-0.5.21-test.zip'),str(tmp))
         app=tmp/'ClaudeSafeLauncher.app'
         run('/usr/bin/codesign','--verify','--strict','--deep',str(app))
         info=plistlib.loads((app/'Contents/Info.plist').read_bytes())
-        assert info['CFBundleVersion']=='47' and info['CFBundleIconFile']=='AppIcon'
+        assert info['CFBundleVersion']=='48' and info['CFBundleIconFile']=='AppIcon'
         assert run('/usr/bin/lipo','-archs',str(app/'Contents/MacOS/ClaudeSafeLauncher')).strip()==arch.encode()
         resources=app/'Contents/Resources'
+        assert (resources/'profile-summaries.rb').read_bytes()==(root/'Resources/profile-summaries.rb').read_bytes()
+        preview=subprocess.run(['/usr/bin/ruby',str(resources/'profile-summaries.rb')],input=b'["proxies: [{type: http}]"]',capture_output=True,check=True)
+        import json
+        assert json.loads(preview.stdout)==[{'nodeCount':1,'httpCount':1,'providerCount':0}]
         assert (resources/'技术与功能详解.md').read_bytes()==(root/'docs/技术与功能详解.md').read_bytes()
         run('/usr/bin/codesign','--verify','--strict','--deep',str(resources/'Recovery/移除 Claude Guard.app'))
         assert (resources/'Recovery/恢复网络.command').is_file()
@@ -60,6 +64,6 @@ try:
             print(run(str(resources/'guard-probe'),'--self-test').decode().strip())
             print(run(str(resources/'guard-daemon'),'--self-test-timer').decode().strip())
         else: print('Intel cross-build: static verification only; no Intel hardware acceptance')
-    print(f'PASS DMG: installer signed; payload matches; {arch} build47; ten icon sizes; recovery parity')
+    print(f'PASS DMG: installer signed; payload matches; {arch} build48; ten icon sizes; recovery parity')
 finally:
     if mount is not None:run('/usr/bin/hdiutil','detach',str(mount))

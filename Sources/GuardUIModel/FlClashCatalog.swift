@@ -8,7 +8,8 @@ public struct FlClashConfiguration:Identifiable,Sendable {
     public let name:String
     public let modifiedAt:Date
     public let generated:Bool
-    public init(path:String,name:String,modifiedAt:Date,generated:Bool) {self.path=path;self.name=name;self.modifiedAt=modifiedAt;self.generated=generated}
+    public var summary:ProfileSummary
+    public init(path:String,name:String,modifiedAt:Date,generated:Bool,summary:ProfileSummary=ProfileSummary()) {self.path=path;self.name=name;self.modifiedAt=modifiedAt;self.generated=generated;self.summary=summary}
     public var filename:String {URL(fileURLWithPath:path).lastPathComponent}
 }
 
@@ -23,7 +24,7 @@ public struct FlClashCatalog:Sendable {
         guard lstat(url.path,&value)==0,(value.st_mode&S_IFMT)==type,value.st_uid==getuid(),value.st_size>=0,value.st_size<=maxSize else{return nil}
         return value
     }
-    public static func discover(root:URL=defaultRoot) throws -> FlClashCatalog {
+    public static func discover(root:URL=defaultRoot,summaryScript:String=Bundle.main.resourceURL?.appendingPathComponent("profile-summaries.rb").path ?? "") throws -> FlClashCatalog {
         guard metadata(root,type:S_IFDIR) != nil else{throw fail("未找到可读取的 FLClash 配置目录；请先在 FLClash 导入配置，或使用手动选择文件。")}
         var names:[String:String]=[:],warnings:[String]=[]
         let database=root.appendingPathComponent("database.sqlite")
@@ -59,6 +60,8 @@ public struct FlClashCatalog:Sendable {
         if let value=metadata(generated,type:S_IFREG,maxSize:2_000_000) {
             entries.append(.init(path:generated.path,name:"生成配置（不保证是当前订阅）",modifiedAt:Date(timeIntervalSince1970:TimeInterval(value.st_mtimespec.tv_sec)),generated:true))
         }
+        let summaries=ProfileSummary.read(paths:entries.map(\.path),uid:getuid(),script:summaryScript)
+        for index in entries.indices {entries[index].summary=summaries[index]}
         return .init(entries:entries,warning:warnings.joined(separator:"\n"))
     }
 }

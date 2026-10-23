@@ -7,6 +7,18 @@ public struct Guidance:Equatable {
     public let severe:Bool
     public init(_ category:String,_ title:String,_ action:String,severe:Bool=false){self.category=category;self.title=title;self.action=action;self.severe=severe}
     public static func reason(_ raw:String)->Guidance {
+        if raw.contains("PF display failed") {
+            return .init("读取失败","无法完整读取 PF 防火墙规则","查看处理方法并采集只读诊断，检查助手权限；这不是已确认规则冲突或泄漏。恢复受阻时先使用恢复工具。")
+        }
+        if raw.contains("PF anchor inventory changed") || raw.contains("PF Internet Sharing inventory changed") {
+            return .init("环境正在变化","检查期间防火墙规则发生变化","等待虚拟机、容器或共享服务稳定后重新验证；不要同时启停这些服务。反复出现请导出反馈。")
+        }
+        if raw.contains("PF Internet Sharing") {
+            return .init("网络环境不兼容","共享网络存在活跃规则或未知分支","先保存虚拟机工作，通过相关软件正常停止共享服务后再验证。已知全空残留可通过检查；不要清空 PF。这不代表检测到泄漏。")
+        }
+        if raw.contains("Unknown PF root anchor") || raw.contains("Unknown PF Apple child anchor") {
+            return .init("防火墙环境待核对","发现尚未支持的 PF 规则分支","请导出反馈并采集只读 PF 规则；可能来自互联网共享、虚拟机或其他网络软件。不要清空系统规则；此提示不代表检测到 IP 泄漏。")
+        }
         if raw.contains("Proxy configuration:") {
             let detail=raw.components(separatedBy:"Proxy configuration:").last?.trimmingCharacters(in:.whitespacesAndNewlines) ?? raw
             return .init("配置需要处理",detail,"保持 OFF，在「网络设置 → 选择并登记配置」核对路径。选择当前使用的单节点 HTTP 配置，再确认端点并验证。")

@@ -3,6 +3,50 @@ import GuardRuntime
 @testable import GuardUIModel
 
 struct GuidanceTests {
+    @Test @MainActor func pfFailureOffersRemedyOncePerOperationNotEveryPoll() async throws {
+        let model=AppModel(autoPoll:false,preferences:nil,transport:{request in
+            var status=Status();status.phase="off";status.lastRisk="PF Internet Sharing is not empty; observed=host_v4"
+            return .init(ok:request.operation != .verify,status:status,error:request.operation == .verify ? status.lastRisk:nil)
+        })
+        await model.request(.verify)?.value
+        #expect(model.pfIssueAlert != nil)
+        let help=try #require(PFDiagnosticHelp(reason:model.pfIssueAlert!))
+        #expect(help.steps.contains("保存") && help.steps.contains("OFF"))
+        #expect(!help.readOnlyCommand.contains("-F") && !help.readOnlyCommand.contains("-d"))
+        model.acknowledgeVisibleAlert()
+        model.poll();try await Task.sleep(for:.milliseconds(40))
+        #expect(model.pfIssueAlert==nil)
+        await model.request(.verify)?.value
+        #expect(model.pfIssueAlert != nil)
+        await model.request(.stop)?.value
+        #expect(model.pfIssueAlert==nil)
+    }
+    @Test func pfReadFailureAndActualSharingConflictHaveDifferentRemedies() throws {
+        let unreadable=try #require(PFDiagnosticHelp(reason:"PF display failed or reported an error; required evidence unavailable"))
+        let sharing=try #require(PFDiagnosticHelp(reason:"PF Internet Sharing is not empty"))
+        #expect(unreadable.title != sharing.title)
+        #expect(!unreadable.steps.contains("shutdown") && sharing.steps.contains("虚拟机"))
+        #expect(PFDiagnosticHelp(reason:"Expected egress mismatch")==nil)
+    }
+    @Test func unknownPFAnchorHasActionableGuidanceWithoutClaimingLeak() {
+        let guidance=Guidance.reason("Unknown PF root anchor; observed=[com.apple,vendor.test]")
+        #expect(guidance.title.contains("PF") && guidance.action.contains("只读"))
+        #expect(guidance.action.contains("不") && !guidance.title.contains("泄漏"))
+    }
+    @Test func internetSharingIsExplainedAsCompatibilityNotIPMismatch() {
+        let guidance=Guidance.reason("PF Internet Sharing is not empty; observed=host_v4")
+        #expect(guidance.title.contains("共享") && guidance.action.contains("虚拟机"))
+        #expect(guidance.action.contains("不") && !guidance.title.contains("泄漏"))
+    }
+    @Test func unrelatedUnknownRootIsNotBlamedOnEmptySharing() throws {
+        let reason="Unknown PF root anchor; observed=com.apple,com.apple.internet-sharing,vendor.test; count=3"
+        let help=try #require(PFDiagnosticHelp(reason:reason))
+        #expect(!help.steps.contains("Parallels") && help.steps.contains("实际分支"))
+        #expect(Guidance.reason(reason).category=="防火墙环境待核对")
+        let change="PF Internet Sharing inventory changed during inspection"
+        #expect(Guidance.reason(change).category=="环境正在变化")
+        #expect(PFDiagnosticHelp(reason:change)?.title.contains("变化")==true)
+    }
     @Test @MainActor func daemonReportedOFFIsNotMislabelledAsIPCFailure() async throws {
         let model=AppModel(autoPoll:false,preferences:nil,transport:{ request in
             var status=Status();status.phase="off"

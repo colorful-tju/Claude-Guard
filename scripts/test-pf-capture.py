@@ -11,7 +11,7 @@ import unittest
 
 
 class CaptureTests(unittest.TestCase):
-    def capture(self, diagnostic=False, own_present=True):
+    def capture(self, diagnostic=False, own_present=True, sharing=False):
         original = pathlib.Path(__file__).with_name("capture-pf-environment.sh").read_text()
         with tempfile.TemporaryDirectory(prefix="csg-pf-capture-") as temp:
             directory = pathlib.Path(temp)
@@ -22,6 +22,8 @@ class CaptureTests(unittest.TestCase):
                             "print('No ALTQ support in kernel', file=sys.stderr)\n"
                             "print('ALTQ related functions disabled', file=sys.stderr)\n"
                             "if sys.argv[1:] == ['-s', 'Anchors']: print('com.apple')\n"
+                            f"if {sharing!r} and sys.argv[1:] == ['-s', 'Anchors']: print('com.apple.internet-sharing')\n"
+                            f"if {sharing!r} and sys.argv[1:] == ['-a', 'com.apple.internet-sharing', '-s', 'Anchors']: print('com.apple.internet-sharing/host_v4\\ncom.apple.internet-sharing/host_v6')\n"
                             "if sys.argv[1:] == ['-a', 'com.apple', '-s', 'Anchors']:\n"
                             "    print('  com.apple/200.AirDrop\\n  com.apple/250.ApplicationFirewall')\n"
                             f"    if {own_present!r}: print('  com.apple/000.local.claudesafelauncher')\n"
@@ -37,6 +39,14 @@ class CaptureTests(unittest.TestCase):
                               .replace('/sbin/pfctl', str(fake)).replace('/bin/ps -axo pid,ppid,uid,comm', '/usr/bin/true'))
             result = subprocess.run(['/bin/bash', str(script)], capture_output=True, text=True)
             return result, [json.loads(line) for line in calls.read_text().splitlines()]
+
+    def test_sharing_children_are_captured_when_present_only(self):
+        for sharing in [False, True]:
+            result, calls = self.capture(sharing=sharing)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for anchor in ["com.apple.internet-sharing", "com.apple.internet-sharing/host_v4", "com.apple.internet-sharing/host_v6"]:
+                for suffix in [["-sr"], ["-sn"], ["-s", "Anchors"]]:
+                    self.assertEqual(["-a", anchor] + suffix in calls, sharing)
 
     def test_zero_exit_with_ioctl_error_is_reported_as_failed_capture(self):
         result, _ = self.capture(diagnostic=True)

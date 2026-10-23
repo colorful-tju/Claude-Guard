@@ -10,6 +10,7 @@ import GuardCore
     @Published public var ipStale=false
     @Published public var state=Status() {didSet{observeInterruption();observeEgressWarning();updateActivityLease()}}
     @Published public var registrationAlert=false
+    @Published public var pfIssueAlert:String?
     @Published public var interruptionAlert:ProtectionInterruption?
     private var lastPresentedInterruption:String?
     private func observeInterruption() {
@@ -31,6 +32,7 @@ import GuardCore
     public func acknowledgeVisibleAlert() {
         if registrationAlert {registrationAlert=false;return}
         if interruptionAlert != nil {acknowledgeInterruption();return}
+        if pfIssueAlert != nil {pfIssueAlert=nil;return}
         if let event=egressWarningAlert {preferences?.set(event.id,forKey:"acknowledgedEgressWarning")}
         egressWarningAlert=nil
     }
@@ -170,7 +172,7 @@ import GuardCore
             if needsIPv6Off {failure="IPv6 default route detected";return nil}
         }
         revision+=1;let version=revision
-        busy=true;failure="";state.verified=false;ipStale=true
+        busy=true;failure="";pfIssueAlert=nil;state.verified=false;ipStale=true
         if [.stop,.shutdown].contains(operation){state.phase="stopping"}
         else if [.start,.verify].contains(operation){state.phase="checking"}
         var saved=settings;saved.providerConfirmed=confirmation;saved.confirmationFingerprint=state.fingerprint
@@ -184,6 +186,9 @@ import GuardCore
                     guard let self,version==self.revision else{return}
                     if [.stop,.shutdown].contains(operation),reply.ok {self.acknowledgeInterruption()}
                     self.state=reply.status;self.failure=reply.error ?? "";self.busy=false;self.stopping=false
+                    if !reply.ok,[.start,.verify,.inspect].contains(operation),PFDiagnosticHelp(reason:self.failure) != nil,self.interruptionAlert==nil {
+                        self.pfIssueAlert=self.failure
+                    }
                     if operation == .registerProxyConfiguration {
                         self.confirmation=false
                         if reply.ok {

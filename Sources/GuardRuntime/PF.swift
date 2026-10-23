@@ -27,15 +27,34 @@ public final class PacketFilter: PacketFiltering, @unchecked Sendable {
         return(roots,children)
     }
     private func ownPresent() throws -> Bool {try inventories().1.contains("000.local.claudesafelauncher")}
+    private func emptySharingImage() throws -> String {
+        let path="com.apple.internet-sharing"
+        let filter=try pf(["-a",path,"-sr"]),nat=try pf(["-a",path,"-sn"])
+        let names=try PFText.anchorNames(pf(["-a",path,"-s","Anchors"]),parent:path)
+        guard [filter,nat].allSatisfy({$0.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty}),
+              Set(names).isSubset(of:["host_v4","host_v6"]) else{throw fail("PF Internet Sharing is not empty or has unknown children; observed=\(names.prefix(16).joined(separator:","))")}
+        for name in names {
+            let child=path+"/"+name
+            let contents=[try pf(["-a",child,"-sr"]),try pf(["-a",child,"-sn"]),try pf(["-a",child,"-s","Anchors"])]
+            guard contents.allSatisfy({$0.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty}) else{
+                throw fail("PF Internet Sharing is not empty; observed=\(child)")
+            }
+        }
+        guard try PFText.anchorNames(pf(["-a",path,"-s","Anchors"]),parent:path)==names else{throw fail("PF Internet Sharing inventory changed during inspection")}
+        return path+"\n"+names.joined(separator:"\n")+"\nall-filter-nat-and-leaf-bodies-empty"
+    }
     private func capture(_ policy:GuardPolicy?) throws -> PFView {
         let inventory=try inventories()
-        guard Set(inventory.0).isSubset(of:["com.apple"]) else{throw fail("Unknown PF root anchor")}
+        guard Set(inventory.0).isSubset(of:["com.apple","com.apple.internet-sharing"]) else{throw fail("Unknown PF root anchor; observed=\(inventory.0.prefix(16).joined(separator:",")); count=\(inventory.0.count)")}
+        // macOS can retain these names after Parallels/shared networking exits.
+        // Accept only positively read empty bodies, never active sharing rules.
+        let sharing=try inventory.0.contains("com.apple.internet-sharing") ? emptySharingImage():nil
         let main=try pf(["-sr"]),interfaces=try pf(["-s","Interfaces","-v"])
         let parent=inventory.0.contains("com.apple") ? try pf(["-a","com.apple","-sr"]) : ""
         let parentNAT=inventory.0.contains("com.apple") ? try pf(["-a","com.apple","-sn"]) : ""
         var children:[String:PFAnchorContents]=[:];var ownRules=""
         for name in inventory.1 {
-            guard ["200.AirDrop","250.ApplicationFirewall","000.local.claudesafelauncher"].contains(name) else{throw fail("Unknown PF Apple child anchor")}
+            guard ["200.AirDrop","250.ApplicationFirewall","000.local.claudesafelauncher"].contains(name) else{throw fail("Unknown PF Apple child anchor; observed=\(name)")}
             let path="com.apple/"+name
             let nat=try pf(["-a",path,"-sn"]),nested=try pf(["-a",path,"-s","Anchors"])
             if name=="000.local.claudesafelauncher" {
@@ -45,9 +64,10 @@ public final class PacketFilter: PacketFiltering, @unchecked Sendable {
             } else {children[name] = .init(filter:try pf(["-a",path,"-sr"]),nat:nat,children:nested)}
         }
         try PFText.environment(main:main,siblings:inventory.1.joined(separator:"\n"),skipped:interfaces,
-                               appleRules:parent,appleNAT:parentNAT,appleChildren:children)
+                               appleRules:parent,appleNAT:parentNAT,appleChildren:children,sharingEmpty:sharing != nil)
         let nat=try pf(["-sn"])
-        guard nat.components(separatedBy:.newlines).allSatisfy({$0.isEmpty || $0.hasPrefix("nat-anchor \"com.apple/*\"") || $0.hasPrefix("rdr-anchor \"com.apple/*\"") || $0.hasPrefix("binat-anchor \"com.apple/*\"")}) else{throw fail("Unknown PF NAT environment")}
+        let sharingNAT:Set<String> = sharing == nil ? []:["nat-anchor \"com.apple.internet-sharing\" all","rdr-anchor \"com.apple.internet-sharing\" all"]
+        guard nat.components(separatedBy:.newlines).allSatisfy({$0.isEmpty || $0.hasPrefix("nat-anchor \"com.apple/*\"") || $0.hasPrefix("rdr-anchor \"com.apple/*\"") || $0.hasPrefix("binat-anchor \"com.apple/*\"") || sharingNAT.contains($0)}) else{throw fail("Unknown PF NAT environment")}
         let refs=try pf(["-s","References"]);let info=try pf(["-s","info"])
         guard info.hasPrefix("Status: Enabled") || info.hasPrefix("Status: Disabled") else{throw fail("Unknown PF status format")}
         let observedStates=try policy.map{try states($0)} ?? []
@@ -56,7 +76,7 @@ public final class PacketFilter: PacketFiltering, @unchecked Sendable {
         guard inventory.0==after.0,inventory.1==after.1 else{throw fail("PF anchor inventory changed during inspection")}
         // This foreign-environment image is fingerprinted and journalled. Exclude
         // our own child's existence: loading/removing our rules is an expected change.
-        let image=PFText.foreignImage(main:main,nat:nat,parent:parent,children:inventory.1)
+        let image=PFText.foreignImage(main:main,nat:nat,parent:parent,children:inventory.1,sharing:sharing)
         return .init(enabled:info.hasPrefix("Status: Enabled"),main:image,references:refs,states:observedStates,canonical:ownRules,labels:labelText)
     }
     public func environment() throws -> (String,String,Bool) {let v=try capture(nil);return(v.main,v.references,v.enabled)}

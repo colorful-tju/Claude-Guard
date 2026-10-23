@@ -15,6 +15,26 @@ private final class CatalogFixture {
 }
 
 struct FlClashCatalogTests {
+    @Test func numericFilenamesHaveCountsAndProvidersRemainExplicitlyIncomplete() throws {
+        let f=try CatalogFixture()
+        try f.file("profiles/100.yaml","proxies: [{type: http}]")
+        try f.file("profiles/200.yaml","proxies: [{type: http}, {type: socks5}]")
+        try f.file("profiles/300.yaml","proxy-providers: {remote: {path: NEVER_EMIT_SECRET}}")
+        try f.file("profiles/400.yaml","proxies: [NEVER_EMIT_SECRET")
+        let script=URL(fileURLWithPath:#filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/profile-summaries.rb").path
+        let catalog=try FlClashCatalog.discover(root:f.root,summaryScript:script)
+        let entries=Dictionary(uniqueKeysWithValues:catalog.entries.map{($0.filename,$0.summary)})
+        #expect(entries["100.yaml"]?.nodeCount==1 && entries["100.yaml"]?.httpCount==1)
+        #expect(entries["200.yaml"]?.nodeCount==2 && entries["200.yaml"]?.httpCount==1)
+        #expect(entries["300.yaml"]?.providerCount==1)
+        #expect(entries["400.yaml"]?.nodeCount==nil && entries["400.yaml"]?.errorCode != nil)
+        #expect(!String(describing:catalog).contains("NEVER_EMIT_SECRET"))
+    }
+    @Test func missingSummaryToolStillAllowsListingButNeverClaimsZero() throws {
+        let f=try CatalogFixture();try f.file("profiles/1.yaml","proxies: [{type: http}]")
+        let entry=try #require(try FlClashCatalog.discover(root:f.root,summaryScript:"/nonexistent/summary.rb").entries.first)
+        #expect(entry.summary.nodeCount==nil && entry.summary.errorCode != nil)
+    }
     @Test func savedNamesResolveExactLargeIDsAndGeneratedConfigIsSeparate() throws {
         let f=try CatalogFixture();try f.database();try f.file("profiles/368414562417905664.yaml");try f.file("profiles/2.yaml");try f.file("config.yaml")
         let db=try Data(contentsOf:f.root.appendingPathComponent("database.sqlite"))
