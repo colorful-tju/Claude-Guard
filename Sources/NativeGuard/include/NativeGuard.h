@@ -8,6 +8,9 @@ typedef struct { int32_t fd, kind, family, state, socket_type, protocol_number; 
 /* 0 = readable live identity, 1 = kernel-confirmed zombie, 2 = kernel-confirmed absent, negative = unknown/error. */
 enum { CSG_PROCESS_ZOMBIE = 1, CSG_PROCESS_GONE = 2 };
 int csg_process(int32_t pid, CSGProcess *out);
+/* Diagnostic follow-up only; never itself authorizes lifecycle/PF decisions. */
+typedef struct { int32_t sysctl_rc, sysctl_error, observed_pid, status, kill_rc, kill_error; uint64_t returned_size, expected_size; } CSGProcessEvidence;
+void csg_process_evidence(int32_t pid, CSGProcessEvidence *out);
 int csg_pids(int32_t *pids, int capacity);
 int csg_sockets(int32_t pid, CSGSocket *out, int capacity);
 int csg_listen(const char *path, uint32_t owner);

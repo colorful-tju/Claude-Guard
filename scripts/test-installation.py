@@ -127,7 +127,7 @@ raise SystemExit('unexpected fixture command '+tool)
                 path.write_text('new-'+path.name)
                 path.chmod(0o755)
             shutil.copy2(tools/'helper',staged/'Contents/Resources/guard-daemon')
-            for version in ['0.2.7','0.2.8','0.2.9','0.3.0','0.3.1','0.3.2','0.4.0','0.4.1','0.4.2','0.4.3','0.4.4','0.4.5','0.4.6','0.5.4','0.5.5','0.5.6','0.5.7','0.5.8','0.5.9','0.5.10','0.5.11','0.5.12','0.5.13','0.5.14','0.5.15','0.5.16','0.5.17','0.5.18','0.5.19','0.5.20','0.5.21']:
+            for version in ['0.2.7','0.2.8','0.2.9','0.3.0','0.3.1','0.3.2','0.4.0','0.4.1','0.4.2','0.4.3','0.4.4','0.4.5','0.4.6','0.5.4','0.5.5','0.5.6','0.5.7','0.5.8','0.5.9','0.5.10','0.5.11','0.5.12','0.5.13','0.5.14','0.5.15','0.5.16','0.5.17','0.5.18','0.5.19','0.5.20','0.5.21','0.5.22']:
                 with zipfile.ZipFile(project/f'dist/ClaudeSafeLauncher-{version}-test.zip','w') as archive:
                     for path in staged.rglob('*'):
                         archive.write(path,path.relative_to(staged.parent))
@@ -150,6 +150,20 @@ raise SystemExit('unexpected fixture command '+tool)
             service_state['sessionPresent']=(private/'session.json').exists()
             service_state['dependenciesPresent']=(app.parent/'FlClash.app').exists() and (app.parent/'Claude.app').exists()
             return result,entries,service_state,preserved,sorted(str(path.relative_to(base)) for path in base.glob('claude-safe-install.*'))
+
+    def test_uninstall_never_restarts_previously_stopped_helper(self):
+        for options in [dict(active=True), dict(ipv6=True), dict(failure='preferences')]:
+            result,calls,service,preserved,_=self.exercise(script='uninstall.sh',loaded=False,**options)
+            self.assertNotEqual(result.returncode,0)
+            self.assertTrue(preserved)
+            self.assertFalse(service['loaded'])
+            self.assertFalse(any(c[:2]==['launchctl','bootstrap'] for c in calls))
+
+    def test_uninstall_unknown_launch_state_never_mutates_service(self):
+        result,calls,service,preserved,_=self.exercise(script='uninstall.sh',failure='launch_error')
+        self.assertNotEqual(result.returncode,0)
+        self.assertTrue(preserved)
+        self.assertFalse(any(c[0]=='launchctl' and c[1] in ['bootstrap','bootout'] for c in calls))
 
     def test_personal_test_requires_explicit_consent(self):
         result,calls,service,preserved,_=self.exercise(consent=False)

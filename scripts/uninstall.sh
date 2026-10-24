@@ -10,15 +10,32 @@ label='local.claudesafelauncher.guard'
 install_lock="$root.install-lock"
 /bin/mkdir -m 700 "$install_lock" || { echo '另一安装/卸载事务存在；保留资产。'; exit 2; }
 trap '/bin/rmdir "$install_lock"' EXIT
+# Preserve an administrator's emergency-stopped state on failure.
+was_loaded=0
+launch_status=0
+launch_output="$(/bin/launchctl print "system/$label" 2>&1)" || launch_status=$?
+if [[ "$launch_status" -eq 0 ]]; then
+  was_loaded=1
+elif [[ "$launch_status" -ne 113 || "$launch_output" != "Bad request."$'\n'"Could not find service \"$label\" in domain for system" ]]; then
+  echo '无法确认助手原状态；未停止或启动服务，保留资产。'
+  exit 2
+fi
+restore_service() {
+  if [[ "$was_loaded" -eq 1 ]]; then
+    /bin/launchctl bootstrap system "/Library/LaunchDaemons/$label.plist" || true
+  else
+    echo '助手原本已停止，保持停止，不自动重新启动。'
+  fi
+}
 /bin/launchctl bootout "system/$label" 2>/dev/null || true
 helper="/Library/PrivilegedHelperTools/$label"
 if ! "$helper" --assert-off; then
-  /bin/launchctl bootstrap system "/Library/LaunchDaemons/$label.plist" || true
-  echo '恢复资产保留；先完成 OFF/恢复。'
+  restore_service
+  echo '卸载未完成：仍有防护事务、PF 引用记录或 IPv6 恢复记录。应急选项 2 仅解除阻断，不等于完整 OFF。若同次开机恢复受阻，请保存工作后重启 Mac，暂不打开 Claude，等待助手恢复 OFF 后再卸载；不要手动删除事务文件。'
   exit 2
 fi
 if ! /usr/bin/sudo -H -u "#$owner_uid" /bin/bash "$script_dir/reset-user-preferences.sh"; then
-  /bin/launchctl bootstrap system "/Library/LaunchDaemons/$label.plist" || true
+  restore_service
   echo '用户偏好未确认清空；保留应用和助手。'
   exit 2
 fi

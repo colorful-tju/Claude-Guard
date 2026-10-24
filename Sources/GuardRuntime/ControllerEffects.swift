@@ -115,7 +115,7 @@ struct ControllerEffects: Sendable {
             },uiAlive:{identity in
                 guard let identity,let record=try? NativeProcesses.record(identity.pid) else{return false}
                 return record.uid==installation.uid && record.identity==identity
-            },inventory:{NativeProcesses.inventory()},terminateClaude:{try NativeProcesses.terminateClaude(uid:installation.uid,known:inspector.trackedClaude)},
+            },inventory:{NativeProcesses.inventory()},terminateClaude:{try NativeProcesses.terminateClaude(uid:installation.uid,known:inspector.trackedClaude,retain:inspector.retainTerminationTargets)},
             observeSockets:{policy,processes in
                 SocketObservationReport.collect(policy:policy,processes:processes)
             },preflightWorker:{record,cancel in try ValidationProbes.preflightWorker(commands:commands,record:record,cancelled:cancel)},verifyClaude:{expected in guard try codeHash(path:ClaudeRegistration.appPath)==expected else{throw ClaudeBuildChanged()}},

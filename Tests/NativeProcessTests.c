@@ -90,6 +90,9 @@ int main(void) {
     if(csg_process(getpid(),&self)!=0 || self.pid!=getpid() || !self.path[0]) {
         fprintf(stderr,"Live self process identity missing\n");return 1;
     }
+    CSGProcessEvidence evidence={0};csg_process_evidence(getpid(),&evidence);
+    assert(evidence.sysctl_rc==0 && evidence.returned_size==evidence.expected_size && evidence.observed_pid==getpid());
+    assert(evidence.kill_rc==0 && evidence.kill_error==0);
     pid_t child=fork();
     if(child<0) {perror("fork");return 1;}
     if(child==0) _exit(0);

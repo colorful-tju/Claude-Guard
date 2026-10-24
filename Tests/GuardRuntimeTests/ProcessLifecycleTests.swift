@@ -71,6 +71,47 @@ import GuardCore
         try ClaudeTermination.run(uid:501,known:[old.identity],inventory:{.init(records:[replacement],issues:[])},read:{_ in replacement},inactive:{_,_ in false},send:{_,_ in signals += 1},wait:{_ in})
         #expect(signals==0)
     }
+    @Test func postSignalTransientInventoryCanRecoverButPersistentUnknownCannotAuthorizeExit() throws {
+        var scans=0
+        try ClaudeTermination.run(uid:501,known:[],inventory:{
+            scans += 1
+            return scans<4 ? .init(records:[],issues:["unreadable exiting PID"]):.init(records:[],issues:[])
+        },read:{_ in row()},inactive:{_,_ in false},send:{_,_ in},wait:{_ in})
+        #expect(scans==4)
+    }
+    @Test func descendantFirstSeenAfterSignalsRemainsTrackedWhenReparented() {
+        let root=row(),child=row(11,parent:10,path:"/usr/bin/tool",name:"tool")
+        let orphan=row(11,parent:1,path:"/usr/bin/tool",name:"tool")
+        var scans=0
+        reject {try ClaudeTermination.run(uid:501,known:[],inventory:{
+            scans += 1
+            if scans<=2{return .init(records:[],issues:[])}
+            return .init(records:scans==3 ? [root,child]:[orphan],issues:[])
+        },read:{_ in root},inactive:{_,_ in false},send:{_,_ in},wait:{_ in})}
+    }
+    @Test func failedTerminationRetainsLateDescendantForNextAttempt() {
+        let root=row(),child=row(11,parent:10,path:"/usr/bin/tool",name:"tool")
+        let orphan=row(11,parent:1,path:"/usr/bin/tool",name:"tool")
+        var scans=0,known:[ProcessIdentity]=[],signals:[Int32]=[]
+        reject {try ClaudeTermination.run(uid:501,known:[],inventory:{
+            scans += 1
+            return .init(records:scans==3 ? [root,child]:(scans>3 ? [orphan]:[]),issues:[])
+        },read:{_ in root},inactive:{_,_ in false},send:{_,_ in},wait:{_ in},retain:{known=$0})}
+        #expect(known.contains{ $0.pid==11 })
+        reject {try ClaudeTermination.run(uid:501,known:known,inventory:{.init(records:[orphan],issues:[])},read:{_ in orphan},inactive:{_,_ in false},send:{pid,_ in signals.append(pid)},wait:{_ in})}
+        #expect(signals.contains(11))
+    }
+    @Test func persistentPartialFinalScanIsBoundedAndCannotConfirmExit() {
+        var scans=0
+        reject {try ClaudeTermination.run(uid:501,known:[],inventory:{scans += 1;return .init(records:[],issues:["unknown"])},read:{_ in row()},inactive:{_,_ in false},send:{_,_ in},wait:{_ in})}
+        #expect(scans==5)
+    }
+    @Test func terminationDiagnosticsDistinguishReadAndSignalFailure() {
+        var events:[String]=[]
+        reject {try ClaudeTermination.run(uid:501,known:[],inventory:{.init(records:[row()],issues:[])},read:{_ in row()},inactive:{_,_ in false},send:{_,_ in throw fail("EPERM")},wait:{_ in},observe:{events.append($0)})}
+        #expect(events.contains{$0.contains("signal-failed") && $0.contains("pid=10")})
+        #expect(events.contains{$0.contains("survivors")})
+    }
     @Test func signalPermissionFailureLeavesSurvivorsAndRejectsOFF() {
         reject {try ClaudeTermination.run(uid:501,known:[],inventory:{.init(records:[row()],issues:[])},read:{_ in row()},inactive:{_,_ in false},send:{_,_ in throw fail("EPERM")},wait:{_ in})}
     }

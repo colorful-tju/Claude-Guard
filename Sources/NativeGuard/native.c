@@ -31,6 +31,15 @@ static int confirmed_inactive(int32_t pid) {
     if(size==sizeof(info) && info.kp_proc.p_pid==pid && info.kp_proc.p_stat==SZOMB) return CSG_PROCESS_ZOMBIE;
     return 0;
 }
+void csg_process_evidence(int32_t pid, CSGProcessEvidence *out) {
+    memset(out,0,sizeof(*out));
+    struct kinfo_proc info={0};size_t size=sizeof(info);
+    int mib[]={CTL_KERN,KERN_PROC,KERN_PROC_PID,pid};
+    errno=0;out->sysctl_rc=sysctl(mib,4,&info,&size,NULL,0);out->sysctl_error=errno;
+    out->returned_size=size;out->expected_size=sizeof(info);
+    if(out->sysctl_rc==0 && size==sizeof(info)){out->observed_pid=info.kp_proc.p_pid;out->status=info.kp_proc.p_stat;}
+    errno=0;out->kill_rc=kill(pid,0);out->kill_error=errno;
+}
 static int confirmed_zombie(int32_t pid) { return confirmed_inactive(pid)==CSG_PROCESS_ZOMBIE; }
 /* A deleted text vnode can fail proc_pidpath while VM retains its kernel path.
  * Never use argv/ps strings, and never turn a path error into process absence.

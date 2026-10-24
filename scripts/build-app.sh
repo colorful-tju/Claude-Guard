@@ -21,7 +21,7 @@ swift scripts/draw-icon.swift "$task_build/AppIcon.iconset"
 /usr/bin/iconutil -c icns "$task_build/AppIcon.iconset" -o "$app/Contents/Resources/AppIcon.icns"
 cp -X README.md LICENSE NOTICE.md "$app/Contents/Resources/"
 cp -X docs/完整验证手册.md "$app/Contents/Resources/新版界面与IPv6验证.md"
-cp -X docs/RELEASE-0.5.21.md "$app/Contents/Resources/RELEASE-0.5.21.md"
+cp -X docs/RELEASE-0.5.22.md "$app/Contents/Resources/RELEASE-0.5.22.md"
 mkdir -p "$app/Contents/Resources/scripts"
 for recovery_tool in emergency-recover.sh rescue-network.rb capture-incident.sh capture-pf-environment.sh redact-incident.rb; do cp -X "scripts/$recovery_tool" "$app/Contents/Resources/scripts/$recovery_tool"; done
 cp -X 恢复网络.command "$app/Contents/Resources/恢复网络.command"
@@ -32,8 +32,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleDisplayName</key><string>Claude 安全启动器 · 测试版</string>
 <key>CFBundleExecutable</key><string>ClaudeSafeLauncher</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.5.21</string>
-<key>CFBundleVersion</key><string>48</string>
+<key>CFBundleShortVersionString</key><string>0.5.22</string>
+<key>CFBundleVersion</key><string>49</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>NSHighResolutionCapable</key><true/>
@@ -47,7 +47,7 @@ mkdir -p "$kit/scripts"
 cp -X "$app/Contents/Resources/guard-daemon" "$kit/guard-daemon"
 cp -X 恢复网络.command "$kit/恢复网络.command"
 cp -X docs/完整验证手册.md "$kit/恢复说明.md"
-cp -X docs/RELEASE-0.5.21.md "$kit/RELEASE-0.5.21.md"
+cp -X docs/RELEASE-0.5.22.md "$kit/RELEASE-0.5.22.md"
 cp -X LICENSE "$kit/LICENSE"
 for recovery_tool in emergency-recover.sh rescue-network.rb capture-incident.sh capture-pf-environment.sh redact-incident.rb; do cp -X "scripts/$recovery_tool" "$kit/scripts/$recovery_tool"; done
 cp -X docs/技术与功能详解.md "$app/Contents/Resources/技术与功能详解.md"
@@ -63,5 +63,5 @@ codesign --verify --strict --deep "$app"
 /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist"
 
 # Keep a signed archive; this workspace may be managed by a FileProvider that adds FinderInfo.
-/usr/bin/ditto -c -k --keepParent --norsrc --noextattr "$app" "$PWD/dist/$arch/ClaudeSafeLauncher-0.5.21-test.zip"
+/usr/bin/ditto -c -k --keepParent --norsrc --noextattr "$app" "$PWD/dist/$arch/ClaudeSafeLauncher-0.5.22-test.zip"
 echo "Verified signed $arch archive created."

@@ -13,6 +13,13 @@ struct InventoryReviewTests {
         #expect(!result.expired && result.event?.contains("pid-reused")==true)
         #expect(review.observe(failed,now:100,tracked:[]).expired==false)
     }
+    @Test func completeEvidenceAtNextTickResetsExpiredObservationWindow() {
+        var review=InventoryReview()
+        _=review.observe(failed,now:10,tracked:[])
+        let result=review.observe(.init(records:[],issues:[]),now:16,tracked:[])
+        #expect(!result.expired && result.event?.contains("recovered")==true)
+        #expect(!review.observe(failed,now:17,tracked:[]).expired)
+    }
     @Test func timeoutAndClockFailuresAreBounded() {
         var review=InventoryReview()
         _=review.observe(failed,now:10,tracked:[])

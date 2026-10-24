@@ -6,6 +6,7 @@ with tempfile.TemporaryDirectory(prefix='monitor-capture-') as temp:
     (private/'last-monitoring-failure.json').write_text(json.dumps({'kind':'monitoringFailure','diagnosticMarker':'SAMPLE029','baseline':{'ownReference':'SECRET_MONITOR_TOKEN'},'current':None}))
     (private/'last-socket-observation.json').write_text(json.dumps({'meaning':'SOCKET031 passive metadata only','ownReference':'SECRET_SOCKET_TOKEN'}))
     (private/'last-monitoring-degradation.json').write_text(json.dumps({'state':'recovered','diagnosticMarker':'INVENTORY016'}))
+    (private/'last-termination.json').write_text(json.dumps({'result':'unconfirmed','events':'TERMINATE022 signal-failed pid=42'}))
     source=(root/'scripts/capture-incident.sh').read_text().replace('if [[ "$EUID" -ne 0 ]]; then','if false; then')
     source=source.replace("root='/Library/Application Support/ClaudeSafeLauncher'",'root='+str(private))
     source=source.replace('/usr/sbin/sysctl -n kern.bootsessionuuid','echo fixture-boot')
@@ -15,6 +16,7 @@ with tempfile.TemporaryDirectory(prefix='monitor-capture-') as temp:
     (scripts/'redact-incident.rb').write_text((root/'scripts/redact-incident.rb').read_text())
     (scripts/'capture-pf-environment.sh').write_text('echo fixture-PF-read-only\n')
     result=subprocess.run(['/bin/bash',str(scripts/'capture-incident.sh')],capture_output=True,text=True,check=True)
+    assert 'TERMINATE022' in result.stdout
     assert 'INVENTORY016' in result.stdout
     assert 'SOCKET031' in result.stdout and 'SECRET_SOCKET_TOKEN' not in result.stdout+result.stderr
     assert 'SAMPLE029' in result.stdout,'New monitoring report missing from incident collector'

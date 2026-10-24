@@ -11,10 +11,10 @@ echo 'readOnly=true; no firewall/network/process changes; no probes'
 /usr/sbin/sysctl -n kern.bootsessionuuid
 script_directory=$(cd "$(/usr/bin/dirname "$0")" && pwd)
 root='/Library/Application Support/ClaudeSafeLauncher'
-for file in events.log last-validation.json last-monitoring-failure.json last-monitoring-degradation.json last-socket-observation.json daemon.stderr.log daemon.stdout.log session.json enable-result.txt; do
+for file in events.log last-validation.json last-monitoring-failure.json last-monitoring-degradation.json last-socket-observation.json last-termination.json daemon.stderr.log daemon.stdout.log session.json enable-result.txt; do
   echo "--- $file ---"
   if [[ -f "$root/$file" && ! -L "$root/$file" ]]; then
-    if [[ "$file" == 'session.json' || "$file" == 'last-validation.json' || "$file" == 'last-monitoring-failure.json' || "$file" == 'last-monitoring-degradation.json' || "$file" == 'last-socket-observation.json' ]]; then
+    if [[ "$file" == 'session.json' || "$file" == 'last-validation.json' || "$file" == 'last-monitoring-failure.json' || "$file" == 'last-monitoring-degradation.json' || "$file" == 'last-socket-observation.json' || "$file" == 'last-termination.json' ]]; then
       /usr/bin/ruby "$script_directory/redact-incident.rb" "$root/$file"
     elif [[ "$file" == 'enable-result.txt' ]]; then
       echo 'Enable result present; raw PF reference withheld'

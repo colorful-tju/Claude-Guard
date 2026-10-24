@@ -28,9 +28,10 @@ struct InventoryReview {
         attempts += 1;retries += inventory.rechecked;recovered += inventory.recovered
         for failure in inventory.failures where failed.count<64 || failed[failure.pid] != nil {failed[failure.pid]=failure}
         let elapsed=now-began!
-        let expired=elapsed>=5
+        let expired = !inventory.complete && elapsed>=5
         let result=inventory.complete ? (expired ? "expired":"recovered") : (expired ? "expired":"pending")
-        // Even a late full scan cannot retroactively prove the five-second observation lease.
+        // The caller has revalidated PF/runtime first. Current complete evidence ends
+        // observation degradation; it does not retroactively assert uninterrupted observation.
         var event:String?
         if first || inventory.complete || expired {
             let identities:[[String:Any]]=failed.keys.sorted().map { pid in

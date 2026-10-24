@@ -125,12 +125,18 @@ struct ControllerLifecycleTests {
             let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
             f.inventoryIssues=["unrelated pid transient"];c.tick()
             #expect(c.status.phase=="armed" && !c.status.processInventoryComplete)
-            f.clock.advance(recover ? 4:5);c.heartbeat()
+            f.clock.advance(recover ? 6:5);c.heartbeat()
             if recover {f.inventoryIssues=[]}
             c.tick()
             #expect(c.status.phase==(recover ? "armed":"recoveryBlocked"))
             #expect(c.status.report.contains(recover ? "recovered":"持续至少 5 秒"))
         }
+    }
+    @Test func lateCompleteInventoryCannotMaskBrokenPF() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
+        f.inventoryIssues=["transient"];c.tick()
+        f.clock.advance(6);c.heartbeat();f.inventoryIssues=[];f.reference=false;c.tick()
+        #expect(c.status.phase != "armed" && f.calls.contains("terminate"))
     }
     @Test func partialInventoryDoesNotMaskBrokenPFOrInterface() throws {
         for change in ["pf","interface","heartbeat","sleep"] {

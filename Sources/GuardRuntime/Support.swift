@@ -37,8 +37,8 @@ public struct ProcessRecord: Sendable {
 }
 public enum NativeProcesses {
     struct ReadFailure:Error,CustomStringConvertible {
-        var pid:Int32;var result:Int32;var nativeError:Int32
-        var description:String {"Process identity unreadable: pid=\(pid) stage=\(result == -1 ? "bsd" : (result == CSG_PROCESS_ZOMBIE ? "confirmed-zombie" : (result == CSG_PROCESS_GONE ? "confirmed-absent":"path"))) rc=\(result) errno=\(nativeError)"}
+        var pid:Int32;var result:Int32;var nativeError:Int32;var confirmation:String?=nil
+        var description:String {"Process identity unreadable: pid=\(pid) stage=\(result == -1 ? "bsd" : (result == CSG_PROCESS_ZOMBIE ? "confirmed-zombie" : (result == CSG_PROCESS_GONE ? "confirmed-absent":"path"))) rc=\(result) errno=\(nativeError)" + (confirmation.map{"; followup="+$0} ?? "")}
     }
     private static func confirmedInactive(_ pid:Int32,error:Error) -> Bool {
         if let native=error as? ReadFailure,(native.result==CSG_PROCESS_ZOMBIE || native.result==CSG_PROCESS_GONE) {return true}
@@ -47,7 +47,14 @@ public enum NativeProcesses {
     }
     public static func record(_ pid:Int32) throws -> ProcessRecord {
         var c=CSGProcess();errno=0;let result=csg_process(pid,&c);let nativeError=errno
-        guard result==0 else{throw ReadFailure(pid:pid,result:result,nativeError:nativeError)}
+        guard result==0 else{
+            var detail:String?
+            if result<0 {
+                var e=CSGProcessEvidence();csg_process_evidence(pid,&e)
+                detail="sysctl(rc=\(e.sysctl_rc),errno=\(e.sysctl_error),size=\(e.returned_size)/\(e.expected_size),pid=\(e.observed_pid),status=\(e.status));kill0(rc=\(e.kill_rc),errno=\(e.kill_error))"
+            }
+            throw ReadFailure(pid:pid,result:result,nativeError:nativeError,confirmation:detail)
+        }
         return .init(pid:c.pid,ppid:c.ppid,uid:c.uid,started:c.started,path:withUnsafePointer(to:&c.path){String(cString:UnsafeRawPointer($0).assumingMemoryBound(to:CChar.self))},name:withUnsafePointer(to:&c.name){String(cString:UnsafeRawPointer($0).assumingMemoryBound(to:CChar.self))})
     }
     public static func inventory() -> ProcessInventory {
@@ -81,9 +88,24 @@ public enum NativeProcesses {
         while added {added=false;for r in eligible where ids.contains(r.ppid) && !ids.contains(r.pid){found.append(r);ids.insert(r.pid);added=true}}
         return found
     }
-    public static func terminateClaude(uid:UInt32,known:[ProcessIdentity]=[]) throws {
-        try ClaudeTermination.run(uid:uid,known:known,inventory:inventory,read:record,inactive:confirmedInactive,send:{pid,signal in
+    public static func terminateClaude(uid:UInt32,known:[ProcessIdentity]=[],retain:([ProcessIdentity])->Void={_ in}) throws {
+        var entries:[String]=[],result="unconfirmed"
+        defer {
+            // Best-effort diagnostic, separate from all safety decisions. No arguments or paths.
+            if geteuid()==0 {
+                try? PrivateFiles.write(["timestamp":ISO8601DateFormatter().string(from:Date()),"result":result,"events":entries.joined(separator:"\n")],to:Paths.root+"/last-termination.json")
+            }
+        }
+        do {try ClaudeTermination.run(uid:uid,known:known,inventory:inventory,read:record,inactive:confirmedInactive,send:{pid,signal in
             if kill(pid,signal) != 0 && errno != ESRCH {throw fail("Cannot signal Claude/Code process pid=\(pid) errno=\(errno)")}
-        },wait:Thread.sleep(forTimeInterval:))
+        },wait:Thread.sleep(forTimeInterval:),observe:{event in
+            if entries.count>=128 {entries.removeFirst()}
+            entries.append(String(event.prefix(2048)))
+        },retain:retain)} catch {
+            let sent=entries.filter{$0.hasPrefix("signal-returned")}.count
+            let failures=entries.filter{$0.hasPrefix("signal-failed") || $0.hasPrefix("target-unverified")}.prefix(4).map{String($0.prefix(512))}
+            throw fail("\(error); termination-actions signalReturns=\(sent) (not exit proof); \(failures.joined(separator:"; ")); details=last-termination.json")
+        }
+        result="exit-confirmed"
     }
 }

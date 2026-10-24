@@ -3,7 +3,7 @@ on run
     try
         set processList to do shell script "/bin/ps -axo comm="
         if processList contains "ClaudeSafeLauncher.app/Contents/MacOS/ClaudeSafeLauncher" then
-            display dialog "请先在启动器菜单栏选择「恢复并退出」，确认 OFF 与临时 IPv6 已恢复。" buttons {"知道了"} default button 1 with icon caution
+            display dialog "请先在启动器菜单栏选择「恢复并退出」，确认 OFF 与临时 IPv6 已恢复。\n\n如果已经使用应急恢复 2 且网络恢复，但界面无法退出，可先强制退出 Claude Guard 界面。应急恢复不等于完整 OFF；若仍有旧事务，请保存工作后重启 Mac，暂不打开 Claude，完成旧事务恢复后再移除。" buttons {"知道了"} default button 1 with icon caution
             return
         end if
         display dialog "移除 Claude Guard 及其管理员助手？\n\n同时清空当前用户的节点设置和首次引导记录。请先记下网关、端口、预期出口和自定义核心路径，重装后需要重新填写。\n\n请先确认防护 OFF、Claude/Code 已退出、临时 IPv6 已恢复。若仍有恢复事务，工具会拒绝移除并保留记录。" buttons {"取消", "移除"} default button "取消" cancel button "取消" with icon caution

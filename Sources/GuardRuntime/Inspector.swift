@@ -12,6 +12,13 @@ public struct RuntimeEvidence:Sendable {
 public final class Inspector: @unchecked Sendable {
     private var nodeCache=VerifiedNodeCache()
     private(set) var trackedClaude:[ProcessIdentity]=[]
+    // Accessed on the existing serialized controller transaction path. Keep late
+    // termination discoveries across failed recovery attempts and reparenting.
+    func retainTerminationTargets(_ targets:[ProcessIdentity]) {
+        var byPID=Dictionary(trackedClaude.map{($0.pid,$0)},uniquingKeysWith:{$1})
+        for target in targets {byPID[target.pid]=target}
+        trackedClaude=byPID.values.sorted{$0.pid<$1.pid}
+    }
     public private(set) var installation:Installation;public let commands:Commands;public let events:NetworkEvents
     public init(_ installation:Installation,commands:Commands,events:NetworkEvents){self.installation=installation;self.commands=commands;self.events=events}
     public func node() throws -> NodeConfiguration {
