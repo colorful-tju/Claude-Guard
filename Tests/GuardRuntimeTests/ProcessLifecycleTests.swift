@@ -8,6 +8,40 @@ import GuardCore
     func row(_ pid:Int32=10,parent:Int32=1,started:UInt64=100,path:String="/Applications/Claude.app/Contents/MacOS/Claude",name:String="Claude",uid:UInt32=501)->ProcessRecord {
         .init(pid:pid,ppid:parent,uid:uid,started:started,path:path,name:name)
     }
+    @Test func terminationFallbackRequiresMatchingLifetimeAndNeverProvesAbsence() throws {
+        let expected=row(); var signals:[Int32]=[];var scans=0
+        try ClaudeTermination.run(uid:501,known:[expected.identity],inventory:{
+            scans += 1
+            return scans<=2 ? .init(records:[],issues:["unreadable main"]):.init(records:[],issues:[])
+        },read:{_ in throw NativeProcesses.ReadFailure(pid:10,result:-1,nativeError:ESRCH)},inactive:{_,_ in false},send:{_,s in signals.append(s)},wait:{_ in},lifetime:{_ in expected})
+        #expect(signals == [SIGTERM,SIGKILL])
+        for bad in [row(started:101),row(uid:502),row(11),row(name:"ClaudeSafeLaunc")] {
+            signals=[]
+            #expect(throws:(any Error).self) {
+                try ClaudeTermination.run(uid:501,known:[expected.identity],inventory:{.init(records:[],issues:["unknown"])},read:{_ in throw fail("read")},inactive:{_,_ in false},send:{_,s in signals.append(s)},wait:{_ in},lifetime:{_ in bad})
+            }
+            #expect(signals.isEmpty)
+        }
+    }
+    @Test func fallbackFailureAndToolExecNeverAuthorizeSignals() {
+        for target in [row(),row(path:"/Users/test/.local/bin/claude",name:"claude")] {
+            var calls=0,signals=0
+            #expect(throws:(any Error).self) {
+                try ClaudeTermination.run(uid:501,known:[target.identity],inventory:{.init(records:[],issues:["unknown"])},read:{_ in throw fail("read")},inactive:{_,_ in false},send:{_,_ in signals += 1},wait:{_ in},lifetime:{_ in
+                    calls += 1;throw NativeProcesses.ReadFailure(pid:10,result:-1,nativeError:EPERM)
+                })
+            }
+            #expect(signals==0)
+            #expect(calls == (target.name=="Claude" ? 2:0))
+        }
+    }
+    @Test func lifetimeReadDoesNotBypassIncompleteFinalInventory() {
+        let expected=row();var signals=0
+        #expect(throws:(any Error).self) {
+            try ClaudeTermination.run(uid:501,known:[expected.identity],inventory:{.init(records:[],issues:["still live"])},read:{_ in throw fail("read")},inactive:{_,_ in false},send:{_,_ in signals += 1},wait:{_ in},lifetime:{_ in expected})
+        }
+        #expect(signals==2)
+    }
     @Test func transientClaudeCodeReadRetriesWithoutLosingIdentity() {
         var reads=0,waits=0
         let code=row(path:"/Users/test/Library/Application Support/Claude/claude-code/2.x/claude.app/Contents/MacOS/claude",name:"claude")

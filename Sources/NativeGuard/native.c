@@ -40,6 +40,32 @@ void csg_process_evidence(int32_t pid, CSGProcessEvidence *out) {
     if(out->sysctl_rc==0 && size==sizeof(info)){out->observed_pid=info.kp_proc.p_pid;out->status=info.kp_proc.p_stat;}
     errno=0;out->kill_rc=kill(pid,0);out->kill_error=errno;
 }
+/* Two complete kernel snapshots; only callers with a previously verified
+ * lifetime may use this to authorize termination. Never synthesize a path. */
+int csg_process_lifetime(int32_t pid, CSGProcess *out) {
+    memset(out,0,sizeof(*out));
+    if(pid<=0){errno=EINVAL;return -1;}
+    struct kinfo_proc before={0},after={0};
+    struct kinfo_proc *rows[]={&before,&after};
+    int mib[]={CTL_KERN,KERN_PROC,KERN_PROC_PID,pid};
+    for(int i=0;i<2;i++) {
+        size_t size=sizeof(before);
+        if(sysctl(mib,4,rows[i],&size,NULL,0)!=0)return -1;
+        if(size==0)return CSG_PROCESS_GONE;
+        if(size!=sizeof(before) || rows[i]->kp_proc.p_pid!=pid){errno=EIO;return -1;}
+        if(rows[i]->kp_proc.p_stat==SZOMB)return CSG_PROCESS_ZOMBIE;
+        if(rows[i]->kp_proc.p_stat!=SRUN && rows[i]->kp_proc.p_stat!=SSLEEP && rows[i]->kp_proc.p_stat!=SSTOP){errno=EAGAIN;return -1;}
+        if(rows[i]->kp_proc.p_starttime.tv_sec<=0 || rows[i]->kp_proc.p_starttime.tv_usec<0 || rows[i]->kp_proc.p_starttime.tv_usec>=1000000){errno=EIO;return -1;}
+    }
+    if(before.kp_proc.p_starttime.tv_sec!=after.kp_proc.p_starttime.tv_sec ||
+       before.kp_proc.p_starttime.tv_usec!=after.kp_proc.p_starttime.tv_usec ||
+       before.kp_eproc.e_ucred.cr_uid!=after.kp_eproc.e_ucred.cr_uid ||
+       memcmp(before.kp_proc.p_comm,after.kp_proc.p_comm,sizeof(before.kp_proc.p_comm))){errno=EAGAIN;return -1;}
+    strlcpy(out->name,after.kp_proc.p_comm,sizeof(out->name));
+    out->pid=pid;out->uid=after.kp_eproc.e_ucred.cr_uid;out->status=after.kp_proc.p_stat;
+    out->started=(uint64_t)after.kp_proc.p_starttime.tv_sec*1000000+after.kp_proc.p_starttime.tv_usec;
+    return 0;
+}
 static int confirmed_zombie(int32_t pid) { return confirmed_inactive(pid)==CSG_PROCESS_ZOMBIE; }
 /* A deleted text vnode can fail proc_pidpath while VM retains its kernel path.
  * Never use argv/ps strings, and never turn a path error into process absence.

@@ -88,6 +88,14 @@ public enum NativeProcesses {
         while added {added=false;for r in eligible where ids.contains(r.ppid) && !ids.contains(r.pid){found.append(r);ids.insert(r.pid);added=true}}
         return found
     }
+    // Deliberately unavailable to inventory/classification. The termination caller
+    // still checks the previously tracked PID/startTime and installation UID.
+    static func terminationLifetime(_ pid:Int32) throws -> ProcessRecord {
+        var c=CSGProcess();errno=0
+        let result=csg_process_lifetime(pid,&c);let nativeError=errno
+        guard result==0 else{throw ReadFailure(pid:pid,result:result,nativeError:nativeError)}
+        return .init(pid:c.pid,ppid:0,uid:c.uid,started:c.started,path:"",name:withUnsafePointer(to:&c.name){String(cString:UnsafeRawPointer($0).assumingMemoryBound(to:CChar.self))})
+    }
     public static func terminateClaude(uid:UInt32,known:[ProcessIdentity]=[],retain:([ProcessIdentity])->Void={_ in}) throws {
         var entries:[String]=[],result="unconfirmed"
         defer {
@@ -101,7 +109,7 @@ public enum NativeProcesses {
         },wait:Thread.sleep(forTimeInterval:),observe:{event in
             if entries.count>=128 {entries.removeFirst()}
             entries.append(String(event.prefix(2048)))
-        },retain:retain)} catch {
+        },retain:retain,lifetime:terminationLifetime)} catch {
             let sent=entries.filter{$0.hasPrefix("signal-returned")}.count
             let failures=entries.filter{$0.hasPrefix("signal-failed") || $0.hasPrefix("target-unverified")}.prefix(4).map{String($0.prefix(512))}
             throw fail("\(error); termination-actions signalReturns=\(sent) (not exit proof); \(failures.joined(separator:"; ")); details=last-termination.json")

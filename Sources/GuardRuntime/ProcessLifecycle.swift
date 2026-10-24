@@ -41,7 +41,7 @@ enum ProcessInventoryCollector {
 enum ClaudeTermination {
     static func run(uid:UInt32,known:[ProcessIdentity],inventory:()->ProcessInventory,
                     read:(Int32)throws->ProcessRecord,inactive:(Int32,Error)->Bool,
-                    send:(Int32,Int32)throws->Void,wait:(TimeInterval)->Void,observe:(String)->Void={_ in},retain:([ProcessIdentity])->Void={_ in}) throws {
+                    send:(Int32,Int32)throws->Void,wait:(TimeInterval)->Void,observe:(String)->Void={_ in},retain:([ProcessIdentity])->Void={_ in},lifetime:((Int32)throws->ProcessRecord)?=nil) throws {
         var tracked=Dictionary(known.map{($0.pid,$0)},uniquingKeysWith:{$1})
         for signal in [SIGTERM,SIGKILL] {
             let snapshot=inventory()
@@ -51,9 +51,15 @@ enum ClaudeTermination {
             retain(Array(tracked.values))
             for expected in tracked.values.sorted(by:{$0.pid<$1.pid}) {
                 do {
-                    let current=try read(expected.pid)
+                    let current:ProcessRecord
+                    do {current=try read(expected.pid)} catch {
+                        guard let lifetime,expected.executableIdentity=="/Applications/Claude.app/Contents/MacOS/Claude" else{throw error}
+                        current=try lifetime(expected.pid)
+                        guard current.name=="Claude" else{throw fail("Termination fallback kernel name mismatch")}
+                        observe("termination-lifetime-fallback pid=\(expected.pid); identity match still required")
+                    }
                     // exec may change a tool's path; lifetime+UID must remain the same.
-                    guard current.started==expected.startTime,current.uid==uid else{observe("identity-replaced pid=\(expected.pid); not signalled");tracked.removeValue(forKey:expected.pid);continue}
+                    guard current.pid==expected.pid,current.started==expected.startTime,current.uid==uid else{observe("identity-replaced pid=\(expected.pid); not signalled");tracked.removeValue(forKey:expected.pid);continue}
                     guard !current.path.hasPrefix(Paths.app+"/Contents/") else{continue}
                     do {
                         try send(current.pid,signal)
