@@ -14,9 +14,25 @@ SCRIPT = pathlib.Path(__file__).with_name('rescue-network.rb')
 
 
 class RescueTests(unittest.TestCase):
+    def test_scoped_override_does_not_disable_global_pf(self):
+        result, calls, state, _ = self.run_rescue('--force-own', claude_ancestor=True, override=True)
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertFalse(state['own'])
+        self.assertTrue(state['enabled'])
+        self.assertNotIn(['pfctl','-d'], calls)
+
+    def test_scoped_override_keeps_helper_lock_and_readback_gates(self):
+        for kwargs in ({'daemon_stuck':True}, {'busy_bad_lock':True}, {'unsafe_directory':True}, {'diagnostic':True}, {'missing_directory':True}):
+            result, calls, state, _ = self.run_rescue('--force-own', override=True, **kwargs)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(state['own'])
+            self.assertFalse(any('-F' in call for call in calls))
+            self.assertTrue(state['enabled'])
+            self.assertNotIn(['pfctl','-d'], calls)
+
     def run_rescue(self, mode, diagnostic=False, disable_fails=False, daemon_stuck=False,
                    launch_error=False, claude_ancestor=False, unsafe_directory=False,
-                   busy_bad_lock=False, override=False):
+                   busy_bad_lock=False, override=False, missing_directory=False):
         with tempfile.TemporaryDirectory(prefix='csg-rescue-test-') as temp:
             root = pathlib.Path(temp)
             private = root / 'private'
@@ -70,6 +86,8 @@ class RescueTests(unittest.TestCase):
             for tool, original in [('pfctl','/sbin/pfctl'),('launchctl','/bin/launchctl'),
                                    ('pkill','/usr/bin/pkill'),('pgrep','/usr/bin/pgrep')]:
                 source = source.replace(original, str(root / tool))
+            if missing_directory:
+                source = source.replace(repr(str(private)), repr(str(root/'missing-private')))
             copy = root / 'rescue.rb'
             copy.write_text(source)
             result = subprocess.run(['/usr/bin/ruby',str(copy),mode]+(['--confirm-unprotected'] if override else []),text=True,capture_output=True,

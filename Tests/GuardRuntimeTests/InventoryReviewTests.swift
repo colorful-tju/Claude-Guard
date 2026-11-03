@@ -20,11 +20,14 @@ struct InventoryReviewTests {
         #expect(!result.expired && result.event?.contains("recovered")==true)
         #expect(!review.observe(failed,now:17,tracked:[]).expired)
     }
-    @Test func timeoutAndClockFailuresAreBounded() {
+    @Test func sustainedUnknownIsDiagnosticOnlyAndClockFailureIsFatal() {
         var review=InventoryReview()
         _=review.observe(failed,now:10,tracked:[])
         #expect(!review.observe(failed,now:14.99,tracked:[]).expired)
-        #expect(review.observe(failed,now:15,tracked:[]).expired)
+        let degraded=review.observe(failed,now:15,tracked:[])
+        #expect(!degraded.expired && degraded.event?.contains("degraded")==true)
+        #expect(review.observe(failed,now:16,tracked:[]).event == nil)
+        #expect(!review.observe(failed,now:3600,tracked:[]).expired)
         #expect(review.observe(failed,now:9,tracked:[]).expired)
     }
     @Test func absentRecoveryRequiresCompleteInventory() {

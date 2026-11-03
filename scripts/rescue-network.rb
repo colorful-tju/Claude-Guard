@@ -4,7 +4,7 @@
 # tokens, deletes recovery assets, restarts the helper, or changes DNS/routes.
 require 'open3'
 
-override = ARGV == ['--last-resort', '--confirm-unprotected']
+override = ARGV.length == 2 && ['--force-own','--last-resort'].include?(ARGV[0]) && ARGV[1] == '--confirm-unprotected'
 ARGV.pop if override
 mode = ARGV.fetch(0, '')
 abort '用法：rescue-network.rb --force-own 或 --last-resort' unless ARGV.length == 1 && ['--force-own', '--last-resort'].include?(mode)
@@ -63,6 +63,8 @@ begin
   missing = "Bad request.\nCould not find service \"#{label}\" in domain for system"
   raise '助手仍加载或 launchd 状态无法核验；未修改 PF' unless loaded == 113 && out.strip.empty? && err.strip == missing
 
+  raise '事务目录不存在，无法取得恢复锁；未修改 PF' if !last_resort && !File.exist?(root)
+
   # Lock the same transaction file after bootout. Do not repair unknown modes
   # or follow links, and never read the journal just to guess a release token.
   begin
@@ -92,6 +94,7 @@ begin
     puts "事务元数据无法核验：#{error}；保留资产，仅执行明确选择的应急 PF 操作。"
   end
 
+  begin
   puts '2/4 尝试结束当前用户的已知 Claude/Helper；不是完整按进程身份验收。'
   uid = ENV['SUDO_UID']
   raise '请从普通用户终端通过 sudo 运行，无法确定用户 UID' unless uid && uid.match?(/\A[0-9]+\z/) && uid.to_i >= 501
@@ -103,6 +106,12 @@ begin
   end
   present, = run_fixed('/usr/bin/pgrep', ['-a', '-u', uid, '-x', pattern])
   raise '已知 Claude（可能含恢复命令的祖先进程）仍在或无法读取；请先退出 Claude，从系统 Terminal/Finder 运行。未解除 PF' unless present == 1
+
+  rescue => process_error
+    raise unless mode == '--force-own' && override
+    warn "进程退出未确认：#{process_error}"
+    warn '已明确选择 UNPROTECT_OWN：仅解除本工具防护；Claude 可能仍在运行，不代表正常 OFF。'
+  end
 
   puts '3/4 只清除本工具 anchor 的 filter；保留 Apple/其他规则、state、token 和事务日志。'
   begin

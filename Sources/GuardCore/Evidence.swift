@@ -255,13 +255,13 @@ public enum MonitoringGate {
         guard current.processInventoryComplete else{throw GuardFailure.rejected("Complete monitoring inventory required; use explicit degraded gate")}
         try validateProtection(current,baseline:baseline,policy:policy)
     }
-    /// Only the controller's bounded review window may call this with truthful incomplete evidence.
+    /// Only active monitoring may call this with truthful incomplete evidence; lifecycle gates remain strict.
     public static func validateDegraded(_ current:LocalSnapshot,baseline:LocalSnapshot,policy:GuardPolicy) throws {
         guard !current.processInventoryComplete else{throw GuardFailure.rejected("Degraded gate requires incomplete inventory")}
         try validateProtection(current,baseline:baseline,policy:policy)
     }
     private static func validateProtection(_ current:LocalSnapshot,baseline:LocalSnapshot,policy:GuardPolicy) throws {
-        // Process completeness belongs to lifecycle gates. Controller bounds degraded observation.
+        // Process completeness belongs to lifecycle gates. Controller reports degraded observation without treating missing metadata as protection failure.
         try SafetyGate.validateProtection(current,policy:policy)
         guard Set(current.states.map(\.id)).isSubset(of:Set(baseline.states.map(\.id))) else{throw GuardFailure.rejected("New state appeared during stateless monitoring")}
         let fields=changedPremises(current,baseline:baseline)

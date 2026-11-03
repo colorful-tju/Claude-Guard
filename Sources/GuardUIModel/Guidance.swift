@@ -89,7 +89,7 @@ public struct Guidance:Equatable {
         }
         if busy {return .init("正在执行","正在执行指令，请稍候","下方持续显示实际阶段；需要取消时点击「关闭防护」。")}
         if !failure.isEmpty {return reason(failure)}
-        if state.phase=="armed" && !state.processInventoryComplete {return .init("正在复核","进程信息暂未完整读取，PF 防护仍运行","自动复核中；持续 5 秒无法确认时将保守停止 Claude。此提示不代表 IP 泄漏。")}
+        if state.phase=="armed" && !state.processInventoryComplete {return .init("正在复核","进程信息暂未完整读取，PF 防护仍运行","持续复核中；仅进程清单不完整不会停止 Claude。PF 与网络关键核验继续；正常退出仍需确认进程已结束。")}
         if state.verified && state.phase=="armed" {return .init("防护运行","防护已验证，持续监控中","保持 已登记代理 与启动器运行；结束使用后点击「关闭防护」。")}
         if let event=state.interruption,state.lastRisk==event.reason {
             let detail=reason(event.reason)

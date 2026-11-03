@@ -15,6 +15,8 @@ struct InventoryDiagnostic: Codable {
 struct InventoryReview {
     struct Outcome {var expired:Bool;var event:String?}
     private var began:Double?
+    private var lastEvent:Double?
+    private var degradedReported=false
     private var attempts=0
     private var retries=0
     private var recovered=0
@@ -28,12 +30,13 @@ struct InventoryReview {
         attempts += 1;retries += inventory.rechecked;recovered += inventory.recovered
         for failure in inventory.failures where failed.count<64 || failed[failure.pid] != nil {failed[failure.pid]=failure}
         let elapsed=now-began!
-        let expired = !inventory.complete && elapsed>=5
-        let result=inventory.complete ? (expired ? "expired":"recovered") : (expired ? "expired":"pending")
+        let degraded = !inventory.complete && elapsed>=5
+        let result=inventory.complete ? "recovered" : (degraded ? "degraded":"pending")
         // The caller has revalidated PF/runtime first. Current complete evidence ends
         // observation degradation; it does not retroactively assert uninterrupted observation.
         var event:String?
-        if first || inventory.complete || expired {
+        if first || inventory.complete || (degraded && !degradedReported) || now-(lastEvent ?? now)>=60 {
+            lastEvent=now;degradedReported=degraded
             let identities:[[String:Any]]=failed.keys.sorted().map { pid in
                 let failure=failed[pid]!
                 let row=inventory.records.first{$0.pid==pid}
@@ -48,7 +51,7 @@ struct InventoryReview {
             let payload:[String:Any]=["state":result,"elapsed":elapsed,"observations":attempts,"nativeRechecks":retries,"nativeRecovered":recovered,"identities":identities,"issues":Array(inventory.issues.prefix(8))]
             event=(try? JSONSerialization.data(withJSONObject:payload,options:[.sortedKeys])).map{String(decoding:$0,as:UTF8.self)} ?? "diagnostic encoding failed"
         }
-        if inventory.complete && !expired {self=InventoryReview()}
-        return .init(expired:expired,event:event)
+        if inventory.complete {self=InventoryReview()}
+        return .init(expired:false,event:event)
     }
 }

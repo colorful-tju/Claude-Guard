@@ -120,7 +120,7 @@ struct ControllerLifecycleTests {
         #expect(reply.ok && c.status.phase=="armed" && c.status.verified)
         #expect(!f.calls.contains("terminate"))
     }
-    @Test func incompleteMonitorRecoversWithoutStopButTimeoutStops() throws {
+    @Test func incompleteMonitorRecoversOrRemainsProtectedWithoutFalseStop() throws {
         for recover in [true,false] {
             let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
             f.inventoryIssues=["unrelated pid transient"];c.tick()
@@ -128,8 +128,8 @@ struct ControllerLifecycleTests {
             f.clock.advance(recover ? 6:5);c.heartbeat()
             if recover {f.inventoryIssues=[]}
             c.tick()
-            #expect(c.status.phase==(recover ? "armed":"recoveryBlocked"))
-            #expect(c.status.report.contains(recover ? "recovered":"持续至少 5 秒"))
+            #expect(c.status.phase=="armed" && !f.calls.contains("terminate"))
+            #expect(c.status.report.contains(recover ? "recovered":"degraded"))
         }
     }
     @Test func lateCompleteInventoryCannotMaskBrokenPF() throws {
@@ -237,6 +237,17 @@ struct ControllerLifecycleTests {
         let views=f.views;f.clock.advance(5);c.tick();#expect(f.views>views)
         #expect(!f.calls.contains("remove-rules"))
         f.failure=nil;_ = c.handle(.init(.stop));#expect(c.status.phase=="off")
+    }
+    @Test func blockedRecoveryResumesAfterInventoryBecomesComplete() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
+        f.inventoryIssues=["unknown system pid"]
+        reject{try c.stop(reason:"manual stop")}
+        for _ in 0..<20 {f.clock.advance(5);c.tick()}
+        #expect(c.status.phase=="recoveryBlocked" && f.reference && !f.rules.isEmpty)
+        #expect(f.calls.filter{$0=="terminate"}.count==4)
+        f.inventoryIssues=[]
+        for _ in 0..<7 {f.clock.advance(5);c.tick()}
+        #expect(c.status.phase=="off" && !f.reference && f.rules.isEmpty)
     }
     @Test func unknownChangedRulesAreNeverRemovedByAutomaticRecovery() throws {
         let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)

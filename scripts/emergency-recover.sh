@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-if [[ "$#" -eq 2 && "$1" == --last-resort && "$2" == --confirm-unprotected ]] || [[ "$#" -eq 1 && ( "$1" == '--force-own' || "$1" == '--last-resort' ) ]]; then
+if [[ "$#" -eq 2 && ( "$1" == --last-resort || "$1" == --force-own ) && "$2" == --confirm-unprotected ]] || [[ "$#" -eq 1 && ( "$1" == '--force-own' || "$1" == '--last-resort' ) ]]; then
   if [[ "$EUID" -ne 0 ]]; then exec /usr/bin/sudo /bin/bash "$0" "$@"; fi
   unset RUBYOPT RUBYLIB GEM_HOME GEM_PATH
   script_directory=$(cd "$(/usr/bin/dirname "$0")" && pwd)

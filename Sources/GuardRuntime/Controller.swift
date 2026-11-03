@@ -13,6 +13,7 @@ public final class Controller: @unchecked Sendable {
     private var ipv6RecoveryAttempt:UInt64?
     private var ipv6RecoveryCount=0
     private var lastRecoveryCheck:UInt64?
+    private var lastRecoveryInventoryCheck:UInt64?
     private var lastSocketObservation:UInt64?
     private var inventoryReview=InventoryReview()
     private var blockedStatistics:BlockedPacketStatistics?
@@ -142,7 +143,7 @@ public final class Controller: @unchecked Sendable {
         self.settings=settings;inventoryReview=InventoryReview();egressMonitor=nil;status.periodicEgress=nil;status.egressWarning=nil;status.egressRechecking=false;blockedStatistics=nil;status.blockedPackets=nil;status.blockedPacketsAt=nil;status.blockedPacketsIssue=nil;launched=false;heartbeatWasDelayed=false;lastMonitorAt=nil;lastMonitorInterval=nil;status.heartbeatDiagnostic=nil;logHealthy=true;status.verified=false;status.phase="checking"
         do {
             try effects.ipv6?.verifyStable()
-            recoveryAttempts=0;lastRecoveryCheck=nil
+            recoveryAttempts=0;lastRecoveryCheck=nil;lastRecoveryInventoryCheck=nil
             try activity.begin();try requireActive()
             status.workerBuildID=try effects.preflightWorker({[self] in try recordProbe($0)},{[self] in cancelled()});try requireActive()
             let e=try inspector.runtime(settings:settings)
@@ -353,8 +354,7 @@ public final class Controller: @unchecked Sendable {
             record.capturedAt=ISO8601DateFormatter().string(from:Date())
             try storage.writeInventoryDiagnostic(String(decoding:JSONEncoder().encode(record),as:UTF8.self))
         }
-        if outcome.expired {throw IncompleteProcessInventory(failures:inventory.failures,
-            issues:["持续至少 5 秒无法核验进程清单"]+inventory.issues)}
+        if outcome.expired {throw fail("Invalid process observation monotonic clock")}
     }
     private func requireEgressMonitor() throws {
         let now=effects.clock.sample().uptime
@@ -437,13 +437,25 @@ public final class Controller: @unchecked Sendable {
             status.udp="PF 限制规则仍在（恢复复核；非新的实包验证）"
         }catch {status.udp="防护未确认（恢复复核失败）"}
         status.monitor="恢复受阻：仅复核 PF 资产；常规出口监控已停止"
-        guard recoveryAttempts<3 else{
-            status.message="恢复受阻；3 次自动恢复尝试已用完，请关闭 Claude 后手动关闭安全模式或使用兜底";return
+        if recoveryAttempts>=3 {
+            status.message="恢复受阻；3 次主动尝试后每 30 秒复核退出状态，身份仍不明确时保留防护。可使用恢复工具明确解除本工具规则。"
+            guard lastRecoveryInventoryCheck==nil || now-lastRecoveryInventoryCheck!>=30 else{return}
+            lastRecoveryInventoryCheck=now
+            do {
+                let inventory=try effects.inventory()
+                guard inventory.complete,
+                      NativeProcesses.claude(inventory.records,uid:installation.uid,known:previousHealthy?.claudeProcesses ?? []).isEmpty else{return}
+                log("recovery inventory complete; retry verified teardown")
+                try stop(reason:"进程退出状态已恢复，重新核验清理",restoreIPv6:recoveryRestoresIPv6)
+            } catch { /* Preserve protection and retry only after the next observation interval. */ }
+            return
         }
         recoveryAttempts += 1
+        lastRecoveryInventoryCheck=now
         do {try stop(reason:"自动恢复重试 \(recoveryAttempts)/3："+status.lastRisk,restoreIPv6:recoveryRestoresIPv6)}
         catch { /* stop preserves assets and reports the precise failing stage. */ }
     }
+
     private func recordMonitoringFailure(policy:GuardPolicy,baseline:LocalSnapshot,stage:String,reason:String,current:LocalSnapshot?,routes:String?,acceptedRouteEquivalence:Bool=false) {
         if serviceRequestedStop(){return}
         updateHeartbeatDiagnostic()
