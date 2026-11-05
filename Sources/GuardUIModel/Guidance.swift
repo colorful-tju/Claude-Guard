@@ -7,6 +7,7 @@ public struct Guidance:Equatable {
     public let severe:Bool
     public init(_ category:String,_ title:String,_ action:String,severe:Bool=false){self.category=category;self.title=title;self.action=action;self.severe=severe}
     public static func reason(_ raw:String)->Guidance {
+        if raw.contains("Claude launch outcome unresolved") {return .init("启动待确认","Claude 启动请求超时或未确认，防护仍保留","这不是 IP 检测超时。系统可能稍后启动 Claude，程序会继续尝试结束它。保存工作后重启再验证；应急解除会失去防护。",severe:true)}
         if raw.contains("Same-boot daemon restart") || raw.contains("同一 boot 重启") || raw.contains("重启恢复受阻") {
             return .init("恢复需收尾","助手重启后，旧事务仍待核验","应急恢复不等于完整 OFF。保存工作并重启 Mac，暂不启动 Claude，等待旧事务恢复后再卸载；不要删除事务记录。",severe:true)
         }
@@ -84,7 +85,7 @@ public struct Guidance:Equatable {
     public static func current(_ state:Status,failure:String,busy:Bool,confirmation:Bool,ip:IPCheck?,stale:Bool)->Guidance {
         if state.phase=="recoveryBlocked" {
             let recovery=state.message+" "+state.lastRisk
-            if recovery.contains("同一 boot 重启") || recovery.contains("Same-boot daemon restart") || recovery.contains("重启恢复受阻") {return reason(recovery)}
+            if recovery.contains("Claude launch outcome unresolved") || recovery.contains("同一 boot 重启") || recovery.contains("Same-boot daemon restart") || recovery.contains("重启恢复受阻") {return reason(recovery)}
             return .init("需要处理","恢复受阻：尚未确认全部退出或完成网络恢复","查看诊断中的信号与进程复核结果。应急选项 2 只解除阻断，不能直接视为 OFF；不要反复卸载或删除事务记录。",severe:true)
         }
         if busy {return .init("正在执行","正在执行指令，请稍候","下方持续显示实际阶段；需要取消时点击「关闭防护」。")}

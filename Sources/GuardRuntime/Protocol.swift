@@ -161,6 +161,7 @@ public struct Journal:Codable,Sendable {
     public var version:Int=1;public var boot:String;public var policy:GuardPolicy;public var token:String?;public var stage:String
     public var initialMain:String;public var initialReferences:String;public var initialEnabled:Bool;public var allowedStates:[String]
     public var expectedCanonicalRules:String="";public var cleanRuleHistory:Bool=true
+    public var launchRequestPending:Bool?
     public init(policy:GuardPolicy,boot:String,main:String,references:String,enabled:Bool,states:[ExistingState]){
         self.policy=policy;self.boot=boot;token=nil;stage="intent";initialMain=main;initialReferences=references;initialEnabled=enabled;allowedStates=states.map(\.id)
     }

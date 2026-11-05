@@ -145,6 +145,15 @@ struct EvidenceTests {
         expectThrows(try SafetyGate.validate(duplicate, final: duplicate.baseline, policy: p, now: 100))
     }
 
+    @Test func oneFreshMatchingExitIsEnoughButConflictStillRejects() throws {
+        let p=try fixturePolicy();var b=fixtureBundle(p)
+        b.egress.removeLast()
+        try SafetyGate.validate(b,final:b.baseline,policy:p,now:100)
+        b.egress=[]
+        expectThrows(try SafetyGate.validate(b,final:b.baseline,policy:p,now:100))
+        b=fixtureBundle(p);b.egress[1].ipv4="8.8.8.8"
+        expectThrows(try SafetyGate.validate(b,final:b.baseline,policy:p,now:100))
+    }
     @Test func requiresTwoIndependentFreshVerifiedEgressResults() throws {
         let p = try fixturePolicy()
         for change: (inout EgressObservation) -> Void in [

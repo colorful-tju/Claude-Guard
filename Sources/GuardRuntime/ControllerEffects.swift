@@ -124,7 +124,11 @@ struct ControllerEffects: Sendable {
                 try PrivateFiles.write(updated,to:Paths.root+"/installation.json")
                 guard try PrivateFiles.read(Paths.root+"/installation.json",as:Installation.self)==updated else{throw fail("Claude registration: 登记文件回读不一致")}
             },
-            launchClaude:{cancelled in _=try commands.checked("/bin/launchctl",["asuser",String(installation.uid),"/usr/bin/sudo","-u","#"+String(installation.uid),"/usr/bin/open","-a","/Applications/Claude.app"],timeout:5,cancelled:cancelled)},
+            launchClaude:{cancelled in
+                _=try commands.checked("/bin/launchctl",["asuser",String(installation.uid),"/usr/bin/sudo","-u","#"+String(installation.uid),"/usr/bin/open","-a","/Applications/Claude.app"],timeout:30,cancelled:cancelled)
+                let main=try ClaudeLaunchConfirmation.observe(uid:installation.uid,cancelled:cancelled)
+                inspector.retainTerminationTargets([main.identity])
+            },
             runProbes:{policy,baseline,installedAt,record,cancelled in try ValidationProbes(pf:pf,commands:commands,record:record,cancelled:cancelled).run(policy:policy,baseline:baseline,installedAt:installedAt)},
             healthProbe:{cancelled in PeriodicEgress.collect(cancelled:cancelled){service in try ProbeExecutor.egress(service:service,commands:commands,cancelled:cancelled)}},assertQuiescent:{try commands.assertQuiescent()},boot:{bootID()},ipv6:TemporaryIPv6())
     }

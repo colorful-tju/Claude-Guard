@@ -229,11 +229,11 @@ public enum SafetyGate {
             throw GuardFailure.rejected("Final premises changed during validation: \(changed.isEmpty ? "sessionID":changed.joined(separator:","))")
         }
         func fresh(_ time: UInt64) -> Bool { time >= bundle.startedAt && time <= now && now - time <= 15 }
-        guard bundle.egress.count == 2, Set(bundle.egress.map(\.service)).count == 2,
+        guard (1...2).contains(bundle.egress.count), Set(bundle.egress.map(\.service)).count == bundle.egress.count,
               bundle.egress.allSatisfy({ $0.sessionID == policy.sessionID && $0.epoch == final.epoch &&
                   $0.ruleFingerprint == policy.rulesFingerprint && $0.ipv4 == policy.endpoint.expectedEgress &&
                   $0.bypassesSystemProxy && $0.tlsVerified && fresh($0.measuredAt) }) else {
-            throw GuardFailure.rejected("Two fresh independent HTTPS exit observations required")
+            throw GuardFailure.rejected("At least one fresh matching HTTPS exit observation and no conflicting result required")
         }
         var required: Set<ProbeKind> = [.boundTCP, .boundUDP, .boundSTUN]
         if final.ipv6Routable { required.insert(.boundIPv6) }

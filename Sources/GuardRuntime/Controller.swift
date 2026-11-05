@@ -214,10 +214,17 @@ public final class Controller: @unchecked Sendable {
             guard status.verified else{throw fail("Cannot persist security event log")}
             if launch {
                 try requireActive()
+                var intent=journal!;intent.launchRequestPending=true
+                try storage.writeJournal(intent);journal=intent
+                status.message="防护已启用，正在等待 Claude 启动确认；此时不会撤除防护"
+                log("Claude launch submitted; durable pending fence installed")
                 try effects.launchClaude({[self] in cancelled()})
                 launched=true
                 try requireActive()
-                try verifyArmedEpoch(policy:policy,baseline:final,routes:finalEvidence.routeDetail,claudeMustBeAbsent:false)
+                try verifyArmedEpoch(policy:policy,baseline:final,routes:finalEvidence.routeDetail,claudeMustBeAbsent:false,forceRead:true)
+                var acknowledged=journal!;acknowledged.launchRequestPending=false
+                try storage.writeJournal(acknowledged);journal=acknowledged
+                log("Claude launch acknowledged; main process observed; pending fence cleared")
             }
             status.message=launch ? "Claude 已安全启动（测试版）" : "防护验收通过；未启动 Claude。请完成 OFF 和恢复测试"
             egressMonitor=EgressMonitor(verifiedAt:effects.clock.sample().uptime);activity.allowProtectedGrace()
@@ -228,14 +235,15 @@ public final class Controller: @unchecked Sendable {
             if journal != nil {do{try stop(reason:cause,restoreIPv6:false)}catch{status.phase="recoveryBlocked";status.verified=false}}
             else {activity.finish();status.phase="off";status.message=cause+"；本次未加载本工具 PF 防护"}
             for event in startupEvents {log("startup network-event \(event)")}
+            if journal?.launchRequestPending == true {throw fail("Claude launch outcome unresolved; PF retained: "+cause)}
             throw error
         }
     }
     /// A completed ARMED proof is retained, never an incomplete startup proof.
     /// Ordinary notifications at the launch boundary use the same full local
     /// revalidation as running sessions; lifecycle/path/PF changes still fail.
-    private func verifyArmedEpoch(policy:GuardPolicy,baseline:LocalSnapshot,routes:String,claudeMustBeAbsent:Bool) throws {
-        guard try inspector.epoch() != (previousHealthy?.epoch ?? baseline.epoch) else{return}
+    private func verifyArmedEpoch(policy:GuardPolicy,baseline:LocalSnapshot,routes:String,claudeMustBeAbsent:Bool,forceRead:Bool=false) throws {
+        guard try forceRead || inspector.epoch() != (previousHealthy?.epoch ?? baseline.epoch) else{return}
         guard let settings else{throw fail("Runtime settings unavailable")}
         let evidence=try inspector.runtime(settings:settings)
         let current=try snapshot(evidence,policy:policy)
@@ -437,6 +445,11 @@ public final class Controller: @unchecked Sendable {
             status.udp="PF 限制规则仍在（恢复复核；非新的实包验证）"
         }catch {status.udp="防护未确认（恢复复核失败）"}
         status.monitor="恢复受阻：仅复核 PF 资产；常规出口监控已停止"
+        if j.launchRequestPending == true,j.boot==effects.boot() {
+            do {try effects.terminateClaude()} catch {log("pending launch termination unconfirmed: \(error)")}
+            status.message="Claude launch outcome unresolved：系统启动请求结果未确认；保留 PF，持续结束迟到的 Claude。请保存工作后重启，或明确选择应急解除防护。"
+            return
+        }
         if recoveryAttempts>=3 {
             status.message="恢复受阻；3 次主动尝试后每 30 秒复核退出状态，身份仍不明确时保留防护。可使用恢复工具明确解除本工具规则。"
             guard lastRecoveryInventoryCheck==nil || now-lastRecoveryInventoryCheck!>=30 else{return}
@@ -522,6 +535,10 @@ public final class Controller: @unchecked Sendable {
         status.phase="stopping";status.lastRisk=reason;status.verified=false;session=SafetySession(recovering:j.policy);log("stop: \(reason)")
         do {
             try effects.terminateClaude()
+            recoveryStage="pendingLaunch"
+            guard j.launchRequestPending != true || j.boot != effects.boot() else {
+                throw fail("Claude launch outcome unresolved; PF retained; process absence does not cancel a queued system launch")
+            }
             recoveryStage="workerQuiescence"
             guard healthGroup.wait(timeout:.now()+12) == .success else{throw fail("Pending health probe did not stop; keep PF active")}
             try effects.assertQuiescent();healthPending=false

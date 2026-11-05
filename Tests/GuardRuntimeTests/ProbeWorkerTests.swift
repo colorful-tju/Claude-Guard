@@ -12,20 +12,21 @@ struct ProbeWorkerTests {
         #expect(result.buildID==BuildIdentity.buildID && result.protocolVersion==BuildIdentity.protocolVersion)
         #expect(result.subprocess && result.concurrentResults==2 && !result.networkProbes)
     }
-    @Test func concurrentEchoFailureCannotReturnPartialEvidence() {
-        #expect(throws:(any Error).self){try ProbeWorker.collectEchoes(timeout:1){service in if service == .ipify{throw fail("fake error")};return "192.0.2.1"}}
+    @Test func completedServiceFailureRetainsOtherServiceEvidence() throws {
+        let values=try ProbeWorker.collectEchoes(timeout:1){service in if service == .ipify{throw fail("fake error")};return "192.0.2.1"}
+        #expect(values.count==1 && values["webshare"]?.ipv4=="192.0.2.1")
     }
     @Test func startupFailureIdentifiesBothServiceOutcomesWithoutRawErrorText() {
         do {
             _=try ProbeWorker.collectEchoes(timeout:1){service in
                 if service == .ipify {throw fail("secret-token=https://private.example")}
-                return "192.0.2.1"
+                throw fail("other service unavailable")
             }
             Issue.record("Expected startup rejection")
         }catch {
             let text=String(describing:error)
             #expect(text.contains("ipify") && text.contains("webshare"))
-            #expect(text.contains("unknown-error") && text.contains("ok"))
+            #expect(text.contains("unknown-error"))
             #expect(!text.contains("secret-token") && !text.contains("private.example"))
         }
     }
@@ -35,14 +36,14 @@ struct ProbeWorkerTests {
                 if service == .ipify {
                     throw EchoRequestFailure(description:ProbeExecutor.echoFailure(service:service,status:35,stderr:"SSL_ERROR_SYSCALL https://secret.example/token"))
                 }
-                return "192.0.2.1"
+                throw fail("other service unavailable")
             }
-            Issue.record("Partial result must not pass startup")
+            Issue.record("Both failed must not pass startup")
         }catch let failure as StartupEchoFailure {
             let encoded=String(decoding:try JSONEncoder().encode(failure),as:UTF8.self)
             let summary=try #require(StartupEchoFailure.decodedSummary(encoded))
             #expect(summary.contains("curl exit=35 detail=ssl-error-syscall"))
-            #expect(summary.contains("webshare[ok") && !summary.contains("secret.example"))
+            #expect(summary.contains("webshare[unknown-error") && !summary.contains("secret.example"))
             #expect(failure.samples.allSatisfy{$0.elapsed>=0})
         }
         #expect(StartupEchoFailure.decodedSummary("not json")==nil)

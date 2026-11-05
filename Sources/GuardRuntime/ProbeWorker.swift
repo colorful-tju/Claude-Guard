@@ -17,10 +17,11 @@ public enum ProbeWorker {
             lock.lock();defer{lock.unlock()}
             if let value{values[service.rawValue] = .init(ipv4:value,measuredAt:monotonic())}
             samples[service] = .init(service:service,outcome:outcome,elapsed:elapsed)
+            ProbeWorker.diagnostic("echo-result service=\(service.rawValue) outcome=\(outcome) elapsed=\(String(format:"%.3f",elapsed))s")
         }
         func read(deadlineExceeded:Bool=false,elapsed:Double) throws -> [String:EchoResult] {
             lock.lock();defer{lock.unlock()}
-            guard !deadlineExceeded,values.count==EgressService.allCases.count else {
+            guard !deadlineExceeded,!values.isEmpty else {
                 throw StartupEchoFailure(deadlineExceeded:deadlineExceeded,samples:EgressService.allCases.map{
                     samples[$0] ?? .init(service:$0,outcome:"pending",elapsed:elapsed)
                 })

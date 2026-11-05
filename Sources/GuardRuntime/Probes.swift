@@ -103,8 +103,11 @@ public final class ValidationProbes: @unchecked Sendable {
         // Run both HTTPS echoes concurrently in the standalone worker; same kernel protection context.
         let output=try worker(["--egress"],stage:"dual-https",timeout:11)
         let observations=try JSONDecoder().decode([String:EchoResult].self,from:output)
-        let egress=try EgressService.allCases.map { service -> EgressObservation in
-            guard let sample=observations[service.rawValue],sample.ipv4==policy.endpoint.expectedEgress else{throw fail("Expected egress mismatch")}
+        guard !observations.isEmpty,observations.keys.allSatisfy({EgressService(rawValue:$0) != nil}) else{throw fail("Invalid startup echo service evidence")}
+        try record("startup echo services=\(observations.keys.sorted().joined(separator:",")); at least one expected IPv4 required, conflicting results rejected")
+        let egress=try EgressService.allCases.compactMap { service -> EgressObservation? in
+            guard let sample=observations[service.rawValue] else{return nil}
+            guard sample.ipv4==policy.endpoint.expectedEgress else{throw fail("Expected egress mismatch")}
             return .init(sessionID:policy.sessionID,epoch:baseline.epoch,ruleFingerprint:policy.rulesFingerprint,service:service,ipv4:sample.ipv4,bypassesSystemProxy:true,tlsVerified:true,measuredAt:sample.measuredAt)
         }
         return .init(sessionID:policy.sessionID,startedAt:installedAt,baseline:baseline,egress:egress,negative:negative)

@@ -32,6 +32,9 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     var beforeProbe:(()->Void)?
     var healthOverride:(@Sendable ()throws->EgressReport)?
     var afterStage:((String)->Void)?
+    var notifiedStage:String?
+    var failLaunchAcknowledgement=false
+    var bootValue="00000000-0000-0000-0000-000000000001"
     var busyWorkers=false,uiPresent=true
     var claude:[ProcessRecord]=[]
     var inventoryIssues:[String]=[]
@@ -69,7 +72,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
                 return .init(sessionID:policy.sessionID,startedAt:startedAt,baseline:baseline,
                     egress:EgressService.allCases.map{.init(sessionID:policy.sessionID,epoch:baseline.epoch,ruleFingerprint:policy.rulesFingerprint,service:$0,ipv4:"1.1.1.1",bypassesSystemProxy:true,tlsVerified:true,measuredAt:measured)},
                     negative:[ProbeKind.boundTCP,.boundUDP,.boundSTUN].map{.init(kind:$0,sessionID:policy.sessionID,epoch:baseline.epoch,ruleFingerprint:policy.rulesFingerprint,dedicatedLabel:policy.probeLabel($0),tupleMatched:true,failed:true,counterBefore:0,counterAfter:1,measuredAt:measured)})
-            },healthProbe:{[self] _ in if let healthOverride{return try healthOverride()};throw fail("Injected echo failure")},assertQuiescent:{[self] in try step("quiescent");if busyWorkers{throw fail("workers active")}},boot:{"00000000-0000-0000-0000-000000000001"},ipv6:ipv6)
+            },healthProbe:{[self] _ in if let healthOverride{return try healthOverride()};throw fail("Injected echo failure")},assertQuiescent:{[self] in try step("quiescent");if busyWorkers{throw fail("workers active")}},boot:{[self] in bootValue},ipv6:ipv6)
         let value=try Controller(installation:installation,effects:effects);controller=value;return value
     }
     func configuration(path:String) throws -> NodeConfiguration {try step("candidate");configurationReads+=1;onConfigurationCheck?();var result=try node();if failure=="changed" && configurationReads>1 {result.fingerprint="changed"};return result}
@@ -85,7 +88,9 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     func epoch() throws -> UInt64 {try step("epoch");return epochValue}
     func exists(_ name:String)->Bool {privateFiles.exists(name)}
     func readJournal() throws -> Journal {try privateFiles.readJournal()}
-    func writeJournal(_ journal:Journal) throws {try step("persist:"+journal.stage);try privateFiles.writeJournal(journal);afterStage?(journal.stage)}
+    func writeJournal(_ journal:Journal) throws {try step("persist:"+journal.stage);try privateFiles.writeJournal(journal)
+        if failLaunchAcknowledgement && journal.launchRequestPending == false {throw fail("acknowledgement write failure")}
+        if notifiedStage != journal.stage {notifiedStage=journal.stage;afterStage?(journal.stage)}}
     func remove(_ name:String) throws {try step("remove:"+name);try privateFiles.remove(name)}
     func appendEvent(_ data:Data) throws {try step("log");try privateFiles.appendEvent(data)}
     func writeDiagnostic(_ value:ValidationDiagnostics) throws {try step("diagnostic");try privateFiles.writeDiagnostic(value);beforeDiagnostic?()}
@@ -113,6 +118,58 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
 }
 
 struct ControllerLifecycleTests {
+    @Test func uncertainLaunchNeverReportsOffAndLateClaudeIsTerminated() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        f.failure="launch"
+        reject{try c.begin(f.settings,launch:true)}
+        #expect(c.status.phase=="recoveryBlocked" && f.reference && !f.rules.isEmpty)
+        #expect(!f.calls.contains("remove-rules") && f.exists("session.json"))
+        f.failure=nil
+        for _ in 0..<6 {
+            f.claude=[.init(pid:555,ppid:1,uid:501,started:100,path:"/Applications/Claude.app/Contents/MacOS/Claude",name:"Claude")]
+            f.clock.advance(5);c.tick()
+            #expect(f.claude.isEmpty && f.reference && !f.rules.isEmpty)
+        }
+        reject{try c.stop(reason:"user stop")}
+        #expect(c.status.phase=="recoveryBlocked" && !f.calls.contains("remove-rules"))
+    }
+    @Test func launchAcknowledgementWriteFailureRetainsFenceInMemory() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        f.failLaunchAcknowledgement=true
+        reject{try c.begin(f.settings,launch:true)}
+        #expect(c.status.phase=="recoveryBlocked" && f.reference && !f.rules.isEmpty)
+        #expect(!f.calls.contains("remove-rules"))
+        f.failLaunchAcknowledgement=false
+        reject{try c.stop(reason:"retry")}
+        #expect(f.reference && !f.rules.isEmpty)
+    }
+    @Test func cancellationAfterSubmissionKeepsPendingFence() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        f.onLaunch={c.requestStop()}
+        reject{try c.begin(f.settings,launch:true)}
+        #expect(c.status.phase=="recoveryBlocked" && f.reference && !f.rules.isEmpty)
+        #expect(!f.calls.contains("remove-rules"))
+    }
+    @Test func pendingLaunchSurvivesDaemonRestartButNotVerifiedKernelReboot() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();f.failure="launch"
+        reject{try c.begin(f.settings,launch:true)};f.failure=nil
+        let restarted=try f.makeController()
+        #expect(restarted.status.phase=="recoveryBlocked" && f.reference)
+        f.bootValue="00000000-0000-0000-0000-000000000002"
+        f.enabled=false;f.reference=false;f.rules=""
+        let rebooted=try f.makeController()
+        #expect(rebooted.status.phase=="off" && !f.exists("session.json"))
+        #expect(!f.calls.contains("remove-rules") && !f.calls.contains("release"))
+    }
+    @Test func acknowledgedShortLivedApplicationExitsThroughNormalRecovery() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        // The launch effect represents a completed command plus observed main process.
+        // Its application has already exited by the subsequent inventory snapshot.
+        try c.begin(f.settings,launch:true)
+        #expect((try f.readJournal()).launchRequestPending == false)
+        c.tick()
+        #expect(c.status.phase=="off" && !f.reference && f.rules.isEmpty)
+    }
     @Test func statusDoesNotCollectOrStopActiveSession() throws {
         let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
         f.inventoryIssues=["unrelated pid transient"]
@@ -176,7 +233,7 @@ struct ControllerLifecycleTests {
                 let change={f.epochValue += 1;if dangerous {f.identityGeneration += 1}}
                 if stage=="armed" {f.afterStage={if $0=="armed" {change()}}}
                 else {f.onLaunch=change}
-                if dangerous {reject{try c.begin(f.settings,launch:true)};#expect(c.status.phase=="off")}
+                if dangerous {reject{try c.begin(f.settings,launch:true)};#expect(c.status.phase==(stage=="launch" ? "recoveryBlocked":"off"))}
                 else {try c.begin(f.settings,launch:true);#expect(c.status.phase=="armed" && f.launches==1)}
             }
         }
