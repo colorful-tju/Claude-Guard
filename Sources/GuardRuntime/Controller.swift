@@ -178,7 +178,21 @@ public final class Controller: @unchecked Sendable {
                 for result in bundle.egress{log("echo=\(result.service.rawValue) ipv4=\(result.ipv4) measuredAt=\(result.measuredAt)")}
                 // Include app identity verification in the final-snapshot window.
                 if launch {try effects.verifyClaude(installation.claudeHash);status.claudeRegistrationRequired=false;try requireActive()}
-                finalEvidence=try inspector.runtime(settings:settings)
+                do {finalEvidence=try inspector.runtime(settings:settings)}
+                catch let missing as GatewaySocketUnavailable where attempt==1 {
+                    // A completed HTTP probe may have closed its upstream socket before
+                    // this sample. Never reuse an old connection as final evidence.
+                    // Keep the fence, recheck its integrity/epoch and rerun ALL probes
+                    // once. The second final snapshot still requires a live connection.
+                    try requireActive()
+                    let fence=try snapshot(protectedEvidence,policy:policy)
+                    try SafetyGate.validateProtection(fence,policy:policy)
+                    try effects.assertQuiescent()
+                    attempt=2
+                    status.message="网关连接暂未采集到；保持防护，重新完整验证（第 2/2 轮）"
+                    try recordProbe("startup gateway-socket recheck 2/2; PF retained; previous probe results discarded; reason=\(missing)")
+                    continue
+                }
                 final=try snapshot(finalEvidence,policy:policy)
                 var diagnostic=ValidationDiagnostics(bundle:bundle,final:final,routesBefore:protectedEvidence.routeDetail,routesAfter:finalEvidence.routeDetail)
                 diagnostic.attempt=attempt;diagnostic.networkEvents=inspector.networkEventDiagnostics()

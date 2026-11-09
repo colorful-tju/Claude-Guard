@@ -30,6 +30,8 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     var beforeVerify:(()->Void)?
     var onLaunch:(()->Void)?
     var beforeProbe:(()->Void)?
+    var runtimeFailure:((Int)->Error?)?
+    var runtimeReads=0
     var healthOverride:(@Sendable ()throws->EgressReport)?
     var afterStage:((String)->Void)?
     var notifiedStage:String?
@@ -79,7 +81,8 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     func adoptConfiguration(path:String) {adoptedPath=path}
     func node() throws -> NodeConfiguration {.init(name:"Webshare-Canada",type:"http",server:"23.20.10.8",port:5376,fingerprint:"config",numeric:true,tunDevice:"utun4")}
     func runtime(settings:Settings) throws -> RuntimeEvidence {
-        try step("runtime")
+        try step("runtime");runtimeReads += 1
+        if let error=runtimeFailure?(runtimeReads) {throw error}
         let core=ProcessIdentity(pid:2345,startTime:100,executableIdentity:"core")
         let physical=InterfaceIdentity(name:"en0",index:6,generation:identityGeneration,ipv4:"172.21.191.84")
         let tun=InterfaceIdentity(name:"utun4",index:20,generation:identityGeneration,ipv4:"198.18.0.1")
@@ -118,6 +121,55 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
 }
 
 struct ControllerLifecycleTests {
+    @Test func missingFinalGatewaySocketRevalidatesWithoutDroppingPF() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        f.runtimeFailure={n in n == 3 ? GatewaySocketUnavailable(physicalAddress:"172.21.191.84") : nil}
+        f.beforeProbe={#expect(f.reference && !f.rules.isEmpty);#expect(f.launches==0)}
+        try c.begin(f.settings,launch:true)
+        #expect(f.calls.filter{$0=="probes"}.count==2)
+        #expect(f.launches==1 && c.status.phase=="armed")
+        #expect(!f.calls.contains("remove-rules"))
+    }
+    @Test func persistentMissingFinalSocketNeverLaunches() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        f.runtimeFailure={n in n>=3 ? GatewaySocketUnavailable(physicalAddress:"172.21.191.84") : nil}
+        reject{try c.begin(f.settings,launch:true)}
+        #expect(f.calls.filter{$0=="probes"}.count==2 && f.launches==0)
+        #expect(c.status.phase=="off" && !f.reference && f.rules.isEmpty)
+    }
+    @Test func missingSocketDoesNotMaskFenceLossEpochChangeOrCancellation() throws {
+        for kind in 0..<4 {
+            let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+            f.runtimeFailure={n in
+                guard n==3 else{return nil}
+                switch kind {
+                case 0:f.rules="tampered"
+                case 1:f.reference=false
+                case 2:f.epochValue += 1
+                default:c.requestStop()
+                }
+                return GatewaySocketUnavailable(physicalAddress:"172.21.191.84")
+            }
+            reject{try c.begin(f.settings,launch:true)}
+            #expect(f.launches==0 && f.calls.filter{$0=="probes"}.count==1)
+        }
+    }
+    @Test func otherFinalEvidenceFailuresAreNotRetried() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        f.runtimeFailure={n in n==3 ? fail("core identity changed") : nil}
+        reject{try c.begin(f.settings,launch:true)}
+        #expect(f.calls.filter{$0=="probes"}.count==1 && f.launches==0)
+    }
+    @Test func socketRetryCannotConcealChangedInterface() throws {
+        let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
+        f.runtimeFailure={n in
+            if n==3 {return GatewaySocketUnavailable(physicalAddress:"172.21.191.84")}
+            if n==4 {f.identityGeneration += 1}
+            return nil
+        }
+        reject{try c.begin(f.settings,launch:true)}
+        #expect(f.launches==0 && c.status.phase=="off")
+    }
     @Test func uncertainLaunchNeverReportsOffAndLateClaudeIsTerminated() throws {
         let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
         f.failure="launch"

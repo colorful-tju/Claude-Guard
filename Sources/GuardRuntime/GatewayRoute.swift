@@ -1,6 +1,13 @@
 import Foundation
 import GuardCore
 
+// Only absence is retryable. A present but inconsistent connection remains fatal.
+public struct GatewaySocketUnavailable:Error,CustomStringConvertible {
+    public let physicalAddress:String
+    public init(physicalAddress:String){self.physicalAddress=physicalAddress}
+    public var description:String {"No verified Core ESTABLISHED gateway TCP socket uses physical address \(physicalAddress) (no established candidate observed)"}
+}
+
 public enum GatewayRoute {
     public static func read(physical:String,gateway:String,commands:Commands) throws -> String {
         // This reads an available scoped path, not the socket's binding option.
@@ -23,6 +30,7 @@ public enum GatewayRoute {
             $0.owner==owner && $0.established && $0.gateway==gateway && $0.port==port &&
             $0.localAddress==physical.ipv4 && $0.localPort>0
         }
+        if connections.isEmpty {throw GatewaySocketUnavailable(physicalAddress:physical.ipv4)}
         guard let selected=candidates.sorted(by:{$0.localPort<$1.localPort}).first else{
             throw fail("No verified Core ESTABLISHED gateway TCP socket uses physical address \(physical.ipv4)")
         }

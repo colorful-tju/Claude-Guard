@@ -32,6 +32,17 @@ struct GatewayRouteTests {
             reject{_ = try GatewayRoute.select(route:route,physical:physical,owner:owner,gateway:"1.1.1.1",port:5376,connections:[c])}
         }
     }
+    @Test func onlyAbsentCandidatesAreRetryable() throws {
+        do {
+            _=try GatewayRoute.select(route:route,physical:physical,owner:owner,gateway:"1.1.1.1",port:5376,connections:[])
+            Issue.record("Missing socket accepted")
+        } catch {#expect(error is GatewaySocketUnavailable)}
+        var wrong=connection();wrong.localAddress="198.18.0.1"
+        do {
+            _=try GatewayRoute.select(route:route,physical:physical,owner:owner,gateway:"1.1.1.1",port:5376,connections:[wrong])
+            Issue.record("Wrong physical address accepted")
+        } catch {#expect(!(error is GatewaySocketUnavailable))}
+    }
     @Test func wrongUnknownOrAmbiguousRouteCannotAuthorizePhysicalPath() {
         for bad in ["",route.replacingOccurrences(of:"interface: en0",with:"interface: utun4"),route+"interface: en0\n",route.replacingOccurrences(of:"1.1.1.1",with:"8.8.8.8")] {
             reject{_ = try GatewayRoute.select(route:bad,physical:physical,owner:owner,gateway:"1.1.1.1",port:5376,connections:[connection()])}
