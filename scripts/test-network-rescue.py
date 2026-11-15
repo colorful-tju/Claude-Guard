@@ -32,7 +32,7 @@ class RescueTests(unittest.TestCase):
 
     def run_rescue(self, mode, diagnostic=False, disable_fails=False, daemon_stuck=False,
                    launch_error=False, claude_ancestor=False, unsafe_directory=False,
-                   busy_bad_lock=False, override=False, missing_directory=False):
+                   busy_bad_lock=False, override=False, missing_directory=False, udp_only=False, udp_corrupt=False):
         with tempfile.TemporaryDirectory(prefix='csg-rescue-test-') as temp:
             root = pathlib.Path(temp)
             private = root / 'private'
@@ -88,6 +88,11 @@ class RescueTests(unittest.TestCase):
                 source = source.replace(original, str(root / tool))
             if missing_directory:
                 source = source.replace(repr(str(private)), repr(str(root/'missing-private')))
+            if udp_only:
+                journal.unlink()
+                udp = private/'udp-session.json'
+                udp.write_text('{broken' if udp_corrupt else json.dumps({'version':1,'policy':{'sessionID':'fixture'}}))
+                udp.chmod(0o600)
             copy = root / 'rescue.rb'
             copy.write_text(source)
             result = subprocess.run(['/usr/bin/ruby',str(copy),mode]+(['--confirm-unprotected'] if override else []),text=True,capture_output=True,
@@ -95,7 +100,24 @@ class RescueTests(unittest.TestCase):
             if held_lock:
                 held_lock.close()
             entries = [json.loads(row) for row in calls.read_text().splitlines()] if calls.exists() else []
-            return result, entries, json.loads(state.read_text()), journal.read_text()
+            return result, entries, json.loads(state.read_text()), journal.read_text() if journal.exists() else ''
+
+    def test_udp_recovery_never_queries_or_signals_claude(self):
+        result, calls, state, _ = self.run_rescue('--force-own',udp_only=True,claude_ancestor=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertFalse(state['own'])
+        self.assertFalse(any(call[0] in ['pgrep','pkill'] for call in calls))
+        self.assertIn('不查询、不结束 Claude',result.stdout)
+
+    def test_corrupt_udp_journal_never_falls_back_to_claude_signals(self):
+        result,calls,state,_=self.run_rescue('--force-own',udp_only=True,udp_corrupt=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertTrue(state['own'])
+        self.assertFalse(any(call[0] in ['pkill','pgrep'] for call in calls))
+        result,calls,state,_=self.run_rescue('--force-own',udp_only=True,udp_corrupt=True,override=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertFalse(state['own'])
+        self.assertFalse(any(call[0] in ['pkill','pgrep'] for call in calls))
 
     def test_force_own_works_without_app_helper_or_valid_journal(self):
         result, calls, state, journal = self.run_rescue('--force-own')

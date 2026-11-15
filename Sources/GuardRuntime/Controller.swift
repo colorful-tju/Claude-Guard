@@ -5,6 +5,7 @@ public final class Controller: @unchecked Sendable {
     public private(set) var installation:Installation;public let commands:Commands;public let pf:any PacketFiltering;public let inspector:any RuntimeInspecting
     private let effects:ControllerEffects;private let storage:any ControllerStorage;private let activity:ControllerActivity
     public private(set) var status=Status()
+    private var udpProtection:UDPProtection?
     private var journal:Journal?;private var session:SafetySession?;private var baseline:LocalSnapshot?;private var settings:Settings?
     public let queue=DispatchQueue(label:"guard.transaction")
     private let healthGroup=DispatchGroup();private var healthPending=false
@@ -38,6 +39,17 @@ public final class Controller: @unchecked Sendable {
     init(installation:Installation,effects:ControllerEffects) throws {
         self.installation=installation;self.effects=effects;commands=effects.commands;pf=effects.pf;inspector=effects.inspector;storage=effects.storage;activity=ControllerActivity(clock:effects.clock)
         status.configurationPath=installation.registeredConfigPath
+        // UDP recovery never enumerates or terminates Claude. Do not enter legacy
+        // orphan-anchor recovery until this independently owned transaction ends.
+        if effects.pf is PacketFilter {
+            udpProtection=try UDPProtection(commands:commands,root:storage.root)
+            if udpProtection?.active == true {
+                guard !storage.exists("session.json") else{throw fail("Conflicting protection journals; manual recovery required")}
+                status.protectionMode = .udpOnly
+                do {try udpProtection!.stop();status.protectionMode=nil}
+                catch {status.phase="recoveryBlocked";status.message="UDP 防护恢复受阻：\(error)";status.udp="未核验";return}
+            }
+        }
         if storage.exists("session.json") {
             do {journal=try storage.readJournal()}
             catch {try? effects.terminateClaude();throw fail("Private recovery journal unreadable; Claude termination attempted, restrictions not removed")}
@@ -112,7 +124,7 @@ public final class Controller: @unchecked Sendable {
     private func persist() throws {if let journal{try storage.writeJournal(journal)}}
     public func inspect() throws {
         try requireRegistrationConsistent()
-        guard journal == nil else{return} // Active UI requests only read the last monitor result.
+        guard journal == nil,udpProtection?.active != true else{return} // Active UI requests only read the last monitor result.
         let n=try inspector.node();status.configurationError=nil;status.gateway="\(n.server):\(n.port)";status.fingerprint=n.fingerprint
         let inventory=effects.inventory()
         try status.applyPreview(inventory,uid:installation.uid,allowPartial:journal == nil || status.phase=="recoveryBlocked",known:previousHealthy?.claudeProcesses ?? [],corePath:installation.registeredCorePath)
@@ -139,7 +151,8 @@ public final class Controller: @unchecked Sendable {
     }
     public func begin(_ settings:Settings,launch:Bool) throws {
         try requireRegistrationConsistent()
-        guard journal==nil,status.phase=="off" else{throw fail("Stop or recover the previous session first")}
+        guard journal==nil,udpProtection?.active != true,status.phase=="off" else{throw fail("Stop or recover the previous session first")}
+        status.protectionMode = .claude
         self.settings=settings;inventoryReview=InventoryReview();egressMonitor=nil;status.periodicEgress=nil;status.egressWarning=nil;status.egressRechecking=false;blockedStatistics=nil;status.blockedPackets=nil;status.blockedPacketsAt=nil;status.blockedPacketsIssue=nil;launched=false;heartbeatWasDelayed=false;lastMonitorAt=nil;lastMonitorInterval=nil;status.heartbeatDiagnostic=nil;logHealthy=true;status.verified=false;status.phase="checking"
         do {
             try effects.ipv6?.verifyStable()
@@ -271,6 +284,26 @@ public final class Controller: @unchecked Sendable {
     }
     public func tick() {
         if serviceRequestedStop(){return}
+        if udpProtection?.active == true {
+            do {try requireActive()}
+            catch {
+                do {try stop(reason:"UDP 控制界面已退出，恢复原 UDP 行为",restoreIPv6:false)}
+                catch {status.phase="recoveryBlocked";status.verified=false;status.message="UDP 恢复受阻：\(error)"}
+                return
+            }
+            do {
+                try udpProtection!.check()
+                status.verified=status.phase=="armed" && udpProtection!.verified
+                status.blockedPackets=udpProtection!.packets
+                status.refreshedAt=ISO8601DateFormatter().string(from:Date())
+            } catch {
+                status.verified=false;status.phase="recoveryBlocked"
+                status.message="UDP 防护异常：\(error)；未管理或结束任何应用"
+                status.lastRisk=String(describing:error)
+                // Keep owned rules on an evidence failure; explicit OFF remains available.
+            }
+            return
+        }
         if journal==nil,(try? effects.ipv6?.hasOverride()) == true {
             // The durable IPv6 lease survives a UI crash. Restore after absence, never during protection.
             do {try activity.check();guard try effects.uiAlive(activity.clientIdentity()) else{throw fail("IPv6 UI lease ended")}}
@@ -524,6 +557,15 @@ public final class Controller: @unchecked Sendable {
     public func stop(reason:String,restoreIPv6 restoreLease:Bool=true) throws {
         recoveryRestoresIPv6=restoreLease
         activity.requestStop()
+        if udpProtection?.active == true {
+            status.phase="stopping";status.verified=false
+            do {
+                try udpProtection!.stop();activity.finish();status.phase="off";status.protectionMode=nil
+                status.udp="OFF";status.monitor="已停止";status.message="UDP 防护已关闭；未关闭任何应用；原 UDP 联网行为已恢复"
+                log("UDP-only OFF verified; no Claude lifecycle operations")
+                return
+            } catch {status.phase="recoveryBlocked";status.message="UDP 恢复受阻：\(error)";throw error}
+        }
         if restartWorkersUnproven {
             try? effects.terminateClaude();status.verified=false;status.phase="recoveryBlocked"
             throw fail("Same-boot daemon restart: prior worker ownership unproven; keep restrictions and recovery assets")
@@ -673,6 +715,7 @@ public final class Controller: @unchecked Sendable {
         do {
             switch request.operation {
             case .status:
+                if udpProtection?.active == true {return .init(ok:true,status:status)}
                 if journal != nil {return .init(ok:true,status:status)}
                 let inventory=effects.inventory()
                 try status.applyPreview(inventory,uid:installation.uid,allowPartial:journal == nil || status.phase=="recoveryBlocked",known:previousHealthy?.claudeProcesses ?? [],corePath:installation.registeredCorePath)
@@ -692,6 +735,25 @@ public final class Controller: @unchecked Sendable {
                 status.workerBuildID=try effects.preflightWorker({[self] in try recordProbe($0)},{[self] in cancelled()})
                 try requireActive();status.message="离线自检通过；未安装 PF、未测试公网、未启动 Claude"
                 log(status.message)
+            case .udpStart:
+                guard journal==nil,status.phase=="off",udpProtection?.active != true,let udpProtection else{throw fail("请先关闭当前防护或完成恢复")}
+                guard let requested=request.settings else{throw fail("Missing physical interface")}
+                guard (try effects.ipv6?.hasOverride()) != true else{throw fail("请先恢复临时 IPv6 设置再开启独立 UDP 防护；此模式不管理 IPv6 租约")}
+                try activity.begin();try requireActive()
+                status.protectionMode = .udpOnly;status.phase="validating";status.verified=false
+                do {
+                    status.workerBuildID=try effects.preflightWorker({[self] in try recordProbe($0)},{[self] in cancelled()})
+                    try requireActive()
+                    try udpProtection.start(physical:requested.physical,cancelled:{[self] in cancelled()},record:{[self] in try recordProbe($0)})
+                    status.phase="armed";status.verified=true;status.udp="ON";status.blockedPackets=0
+                    status.monitor="全机 UDP 限制；不管理 Claude、不验证 TCP/出口"
+                    status.message="仅 UDP 防护已开启；IPv4 探针已验证，IPv6 规则覆盖但未实包验证"
+                    activity.allowProtectedGrace()
+                } catch {
+                    status.phase=udpProtection.active ? "recoveryBlocked":"off";status.verified=false
+                    if !udpProtection.active {status.protectionMode=nil;activity.finish()}
+                    status.message="UDP 防护未完成：\(error)";throw error
+                }
             case .verify,.start:guard let settings=request.settings else{throw fail("Missing settings")};try begin(settings,launch:request.operation == .start)
             case .stop,.shutdown:recoveryAttempts=0;ipv6RecoveryCount=0;try normalStop(restoreIPv6:request.operation == .shutdown)
             case .ipv6Off,.ipv6Automatic,.ipv6Restore:try changeIPv6(request.operation,request.settings)

@@ -32,6 +32,7 @@ final class WindowLifecycle:NSObject,NSApplicationDelegate {
                 .init(path:"/Users/example/Library/Application Support/com.follow.clash/profiles/456.yaml",name:"456.yaml",modifiedAt:Date(),generated:false,summary:.init(nodeCount:2,httpCount:1,providerCount:1,errorCode:nil)),
                 .init(path:"/Users/example/Library/Application Support/com.follow.clash/config.yaml",name:"生成配置（不保证是当前订阅）",modifiedAt:Date(),generated:true)])}
             sample.testingIP=scenario=="loading"
+            if scenario=="udp" {sample.state.protectionMode = .udpOnly;sample.state.phase="armed";sample.state.verified=true;sample.state.blockedPackets=128}
             if scenario=="armed" {sample.state.phase="armed";sample.state.verified=true;sample.state.claude=true;sample.state.blockedPackets=128}
 
             if scenario=="success" || scenario=="error" {
@@ -91,7 +92,7 @@ private struct GuardMenu:View {
         Button("打开主窗口"){openWindow(id:"main");NSApp.activate(ignoringOtherApps:true)}
         Button("关闭防护"){model.request(.stop)}
         Divider()
-        Text("关闭窗口继续防护；退出会关闭 Claude 并恢复")
+        Text(model.state.protectionMode == .udpOnly ? "仅 UDP 模式：退出恢复规则，不关闭应用":"关闭窗口继续防护；退出会关闭 Claude 并恢复")
         Button("恢复并退出启动器"){NSApp.terminate(nil)}.keyboardShortcut("q")
     }
 }
@@ -211,11 +212,11 @@ private struct LauncherView:View {
             HStack(spacing:12) {
                 Image(systemName:model.bannerTone == .protected ? "checkmark.shield.fill":model.bannerTone == .blocked ? "exclamationmark.shield.fill":"shield.lefthalf.filled").font(.system(size:30)).foregroundStyle(bannerColor)
                 VStack(alignment:.leading,spacing:3) {
-                    Text(model.bannerTitle).font(.system(size:20,weight:.bold)).lineLimit(1).help(model.bannerTitle)
-                    Text(model.bannerTone == .protected ? "出口与防护验证通过 · Claude：\(model.state.claudeKnown == false ? "待确认" : (model.state.claude ? "运行中":"未运行"))":model.guidance.action).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(model.guidance.action)
+                    Text(model.state.protectionMode == .udpOnly && model.state.verified ? "仅 UDP 防护已开启" : model.bannerTitle).font(.system(size:20,weight:.bold)).lineLimit(1).help(model.bannerTitle)
+                    Text(model.state.protectionMode == .udpOnly ? "只限制 UDP · TCP 与公网出口未受此模式约束" : model.bannerTone == .protected ? "出口与防护验证通过 · Claude：\(model.state.claudeKnown == false ? "待确认" : (model.state.claude ? "运行中":"未运行"))":model.guidance.action).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(model.guidance.action)
                 }
                 Spacer(minLength:4)
-                Text("已阻断数据包 \(model.blockCountText) 次")
+                Text("已阻断\(model.state.protectionMode == .udpOnly ? " UDP":"")数据包 \(model.blockCountText) 次")
                     .font(.system(size:20,weight:.semibold,design:.rounded)).monospacedDigit()
                     .lineLimit(1).minimumScaleFactor(0.7).frame(width:250,alignment:.trailing)
                     .padding(.horizontal,12).padding(.vertical,10)
@@ -225,7 +226,7 @@ private struct LauncherView:View {
              .background(bannerColor.opacity(0.12),in:RoundedRectangle(cornerRadius:18)).modifier(GlassSurface())
             HStack(spacing:12) {
                 action("安全启动 Claude",icon:"play.fill",primary:true){model.request(.start)}.disabled(!canStart)
-                action("仅验证防护",icon:"checkmark.shield"){model.request(.verify)}.disabled(!canStart)
+                action("开启 UDP 防护",icon:"shield.lefthalf.filled"){model.request(.udpStart)}.disabled(model.busy || model.state.phase != "off").help("全机 UDP 限制，不管理 Claude、不限制 TCP；UDP 代理、传统 DNS、部分音视频将不可用。")
                 action("关闭防护",icon:"stop.fill"){model.request(.stop)}
             }
             HStack(spacing:10) {
@@ -252,7 +253,7 @@ private struct LauncherView:View {
                 Spacer()
 
             }
-            Text("代理 / TUN 由你手动准备。IP 匹配不等于防泄漏验证。关闭窗口继续后台防护；退出会结束 Claude 并恢复原设置。").font(.caption).foregroundStyle(.secondary)
+            Text("代理 / TUN 由你手动准备。仅 UDP 模式不保护 TCP，会影响 UDP 代理、传统 DNS 和部分音视频。关闭窗口继续防护。").font(.caption).foregroundStyle(.secondary)
         }
     }
     private func action(_ title:String,icon:String,primary:Bool=false,run:@escaping ()->Void)->some View {
@@ -361,7 +362,7 @@ private struct LauncherView:View {
         NSWorkspace.shared.open(folder)
         NSWorkspace.shared.open(folder.appendingPathComponent("恢复说明.md"))
     }
-    private var bannerColor:Color {switch model.bannerTone {case .protected:.green;case .waiting:.yellow;case .blocked:.red}}
+    private var bannerColor:Color {switch model.bannerTone {case .protected:model.state.protectionMode == .udpOnly ? .blue:.green;case .waiting:.yellow;case .blocked:.red}}
     private var about:some View {
         VStack(alignment:.leading,spacing:22) {
             card("Claude Guard",icon:"shield.lefthalf.filled") {
@@ -408,6 +409,7 @@ private struct LauncherView:View {
             }
             card("最近事件",icon:"clock") {Text(model.state.lastRisk.isEmpty ? "暂无记录":model.state.lastRisk).textSelection(.enabled).font(.callout);Text("Claude 自行退出属于正常生命周期事件，不等于网络泄漏。").font(.caption).foregroundStyle(.secondary)}
             card("恢复与反馈",icon:"lifepreserver") {
+                Button("仅验证完整防护（不启动 Claude）"){model.request(.verify)}.disabled(!canStart)
                 Button("打开恢复工具与手册"){openRecovery()}.buttonStyle(.borderedProminent)
                 Text("出现恢复受阻时，先点击「关闭防护」。若仍无法联网，在终端执行独立恢复；不要删除恢复记录。").font(.callout)
                 HStack{Button("关闭防护"){model.request(.stop)};Button("导出反馈报告"){model.export()};Button("查看测试与恢复手册"){if let url=Bundle.main.url(forResource:"新版界面与IPv6验证",withExtension:"md"){NSWorkspace.shared.open(url)}}}

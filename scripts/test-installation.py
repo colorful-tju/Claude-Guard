@@ -15,7 +15,7 @@ SCRIPTS = pathlib.Path(__file__).parent
 
 
 class InstallationTests(unittest.TestCase):
-    def exercise(self, failure='', active=False, loaded=True, old=True, script='install.sh', locked=False, marker=False, unsafe_root=False, ipv6=False, wrong_arch=False, consent=True):
+    def exercise(self, failure='', active=False, loaded=True, old=True, script='install.sh', locked=False, marker=False, unsafe_root=False, ipv6=False, wrong_arch=False, consent=True, udp=False):
         with tempfile.TemporaryDirectory(prefix='csg-install-test-') as temp:
             base = pathlib.Path(temp)
             project = base / 'project'
@@ -85,7 +85,7 @@ if tool in ['helper','guard-daemon','local.claudesafelauncher.guard']:
  if args[0]=='--self-test-timer':fail_once('new_helper_launch')
  if args[0]=='--assert-off':
   private=base/'Library/Application Support/ClaudeSafeLauncher'
-  sys.exit(2 if (private.stat().st_mode & 0o022) or (private/'session.json').exists() or (private/'enable-result.txt').exists() or (private/'ipv6-override.json').exists() else 0)
+  sys.exit(2 if (private.stat().st_mode & 0o022) or (private/'session.json').exists() or (private/'udp-session.json').exists() or (private/'enable-result.txt').exists() or (private/'ipv6-override.json').exists() else 0)
  if args[0]=='--register':
   if s['failure']=='rollback':sys.exit(9)
   fail_once('register')
@@ -117,6 +117,8 @@ raise SystemExit('unexpected fixture command '+tool)
                 (private/'enable-result.txt').write_text('uncertain-token-preserved')
             if ipv6:
                 (private/'ipv6-override.json').write_text('original-ipv6-preserved')
+            if udp:
+                (private/'udp-session.json').write_text('udp-transaction-preserved')
             if active:
                 (private/'session.json').write_text('active-transaction-preserved')
             before = {str(path):path.read_bytes() for path in old_assets if path.exists()}
@@ -127,7 +129,7 @@ raise SystemExit('unexpected fixture command '+tool)
                 path.write_text('new-'+path.name)
                 path.chmod(0o755)
             shutil.copy2(tools/'helper',staged/'Contents/Resources/guard-daemon')
-            for version in ['0.2.7','0.2.8','0.2.9','0.3.0','0.3.1','0.3.2','0.4.0','0.4.1','0.4.2','0.4.3','0.4.4','0.4.5','0.4.6','0.5.4','0.5.5','0.5.6','0.5.7','0.5.8','0.5.9','0.5.10','0.5.11','0.5.12','0.5.13','0.5.14','0.5.15','0.5.16','0.5.17','0.5.18','0.5.19','0.5.20','0.5.21','0.5.22','0.5.23','0.5.24','0.5.25','0.5.26']:
+            for version in ['0.2.7','0.2.8','0.2.9','0.3.0','0.3.1','0.3.2','0.4.0','0.4.1','0.4.2','0.4.3','0.4.4','0.4.5','0.4.6','0.5.4','0.5.5','0.5.6','0.5.7','0.5.8','0.5.9','0.5.10','0.5.11','0.5.12','0.5.13','0.5.14','0.5.15','0.5.16','0.5.17','0.5.18','0.5.19','0.5.20','0.5.21','0.5.22','0.5.23','0.5.24','0.5.25','0.5.26','0.5.27']:
                 with zipfile.ZipFile(project/f'dist/ClaudeSafeLauncher-{version}-test.zip','w') as archive:
                     for path in staged.rglob('*'):
                         archive.write(path,path.relative_to(staged.parent))
@@ -148,6 +150,7 @@ raise SystemExit('unexpected fixture command '+tool)
             service_state['rootMode']=(private.stat().st_mode & 0o777) if private.exists() else None
             service_state['markerPresent']=(private/'enable-result.txt').exists()
             service_state['sessionPresent']=(private/'session.json').exists()
+            service_state['udpPresent']=(private/'udp-session.json').exists()
             service_state['dependenciesPresent']=(app.parent/'FlClash.app').exists() and (app.parent/'Claude.app').exists()
             return result,entries,service_state,preserved,sorted(str(path.relative_to(base)) for path in base.glob('claude-safe-install.*'))
 
@@ -220,6 +223,12 @@ raise SystemExit('unexpected fixture command '+tool)
         self.assertFalse(any(call[0]=='launchctl' for call in calls))
         self.assertTrue(preserved and service['loaded'])
         self.assertTrue(service['sessionPresent'])
+
+    def test_udp_transaction_prevents_install_and_uninstall(self):
+        for script in ['install.sh','uninstall.sh']:
+            result,calls,service,preserved,_=self.exercise(script=script,udp=True)
+            self.assertNotEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertTrue(preserved and service['loaded'] and service['udpPresent'])
 
     def test_success_runs_off_assertion_before_registration(self):
         result,calls,service,_,_=self.exercise()

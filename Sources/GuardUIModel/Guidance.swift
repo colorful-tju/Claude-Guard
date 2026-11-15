@@ -7,6 +7,9 @@ public struct Guidance:Equatable {
     public let severe:Bool
     public init(_ category:String,_ title:String,_ action:String,severe:Bool=false){self.category=category;self.title=title;self.action=action;self.severe=severe}
     public static func reason(_ raw:String)->Guidance {
+        if raw.contains("UDP protection: existing UDP") {return .init("UDP 环境待处理","存在先前建立的 UDP 或未知防火墙状态","先停止产生 UDP 的应用后重试；本工具不会清空其他程序的 state，此提示不代表已泄漏。")}
+        if raw.contains("UDP protection: interrupted worker") {return .init("UDP 恢复受阻","助手在操作中重启，旧操作结果未确认","保留限制且不结束应用。保存工作后重启，或使用恢复工具明确解除保护；不要删除事务。",severe:true)}
+        if raw.contains("UDP protection:") {return .init("UDP 防护待核验","UDP 防护操作未通过完整验证","查看下方原始原因并导出反馈；不要视为已保护。恢复受阻时使用恢复工具，不需要退出 Claude。",severe:true)}
         if raw.contains("Claude launch outcome unresolved") {return .init("启动待确认","Claude 启动请求超时或未确认，防护仍保留","这不是 IP 检测超时。系统可能稍后启动 Claude，程序会继续尝试结束它。保存工作后重启再验证；应急解除会失去防护。",severe:true)}
         if raw.contains("Same-boot daemon restart") || raw.contains("同一 boot 重启") || raw.contains("重启恢复受阻") {
             return .init("恢复需收尾","助手重启后，旧事务仍待核验","应急恢复不等于完整 OFF。保存工作并重启 Mac，暂不启动 Claude，等待旧事务恢复后再卸载；不要删除事务记录。",severe:true)

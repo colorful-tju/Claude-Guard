@@ -37,6 +37,9 @@ import GuardCore
         egressWarningAlert=nil
     }
     public var guidance:Guidance {
+        if state.protectionMode == .udpOnly,state.phase=="armed",state.verified,failure.isEmpty {
+            return .init("仅 UDP 防护","全机 UDP 限制已开启","不管理 Claude；不限制 TCP，不保证公网出口。关闭后恢复原 UDP 行为。")
+        }
         if state.phase=="off",!busy,failure.isEmpty,needsIPv6Off {return Guidance.reason("IPv6 default route detected")}
         if state.phase=="armed",state.egressRechecking==true,failure.isEmpty {
             return .init("网络复核","出口待核验，PF 防护继续运行","未关闭 Claude；每 5 分钟重测。当前出口尚未确认；检测到不同公网 IP 会立即停止。")
@@ -76,7 +79,7 @@ import GuardCore
     public var menuStatus:String {
         if busy{return "处理中"}
         if state.phase=="armed",state.egressRechecking==true {return "出口待核验"}
-        if state.verified && state.phase=="armed" {return "已防护"}
+        if state.verified && state.phase=="armed" {return state.protectionMode == .udpOnly ? "仅 UDP":"完整防护"}
         switch state.phase {case "off":return "OFF";case "recoveryBlocked":return "恢复受阻";default:return "待核验"}
     }
     @Published public var busy=false
@@ -167,6 +170,7 @@ import GuardCore
         if [.refreshClaudeRegistration,.registerProxyConfiguration].contains(operation) {guard state.phase=="off" else{return nil}}
         // Clear before transport: commit may succeed even if its reply is lost or superseded by OFF.
         if operation == .registerProxyConfiguration {confirmation=false}
+        if operation == .udpStart,state.phase != "off" {return nil}
         if [.start,.verify].contains(operation) {
             guard state.phase=="off" else{return nil}
             if needsIPv6Off {failure="IPv6 default route detected";return nil}
@@ -174,7 +178,7 @@ import GuardCore
         revision+=1;let version=revision
         busy=true;failure="";pfIssueAlert=nil;state.verified=false;ipStale=true
         if [.stop,.shutdown].contains(operation){state.phase="stopping"}
-        else if [.start,.verify].contains(operation){state.phase="checking"}
+        else if [.udpStart,.start,.verify].contains(operation){state.phase="checking"}
         var saved=settings;saved.providerConfirmed=confirmation;saved.confirmationFingerprint=state.fingerprint
         saveSettings()
         var request=Request(operation,settings:saved);request.configurationPath=configurationPath
@@ -213,7 +217,7 @@ import GuardCore
                     self.state.ipcUnavailable();self.failure=String(describing:error);self.busy=false;self.stopping=false
                     if operation == .refreshClaudeRegistration {self.registrationAlert=true}
                     // A lost reply does not prove the daemon stopped. Request cancellation independently.
-                    if [.start,.verify].contains(operation){self.request(.stop)}
+                    if [.udpStart,.start,.verify].contains(operation){self.request(.stop)}
                 }
             }
         }

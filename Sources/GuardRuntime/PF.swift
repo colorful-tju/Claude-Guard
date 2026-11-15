@@ -103,6 +103,24 @@ public final class PacketFilter: PacketFiltering, @unchecked Sendable {
         }
         return expected
     }
+    func prepareUDP(_ policy:UDPOnlyPolicy) throws -> String {
+        let file=root+"/rules.conf"
+        let fd=open(file,O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0o600)
+        guard fd>=0 else{throw fail("UDP rule file unavailable")}
+        let h=FileHandle(fileDescriptor:fd,closeOnDealloc:true)
+        try h.write(contentsOf:Data(policy.rules.utf8));guard fsync(fd)==0 else{throw fail("UDP rule file fsync failed")};try h.close()
+        let dry=try pf(["-n","-v","-o","none","-a",GuardPolicy.anchor,"-f",file])
+        let lines=dry.components(separatedBy:.newlines).filter{$0.hasPrefix("pass ") || $0.hasPrefix("block ")}
+        guard lines.count==policy.rules.split(separator:"\n").count,
+              lines.filter({$0.hasPrefix("pass ")}).allSatisfy({$0.contains("no state")}),
+              lines.last==policy.rules.split(separator:"\n").last.map(String.init) else{throw fail("UDP dry parse changed protection rules")}
+        return lines.joined(separator:"\n")+"\n"
+    }
+    func activateUDP(_ policy:UDPOnlyPolicy,expected:String) throws {
+        guard try String(contentsOfFile:root+"/rules.conf",encoding:.utf8)==policy.rules else{throw fail("UDP prepared rules changed")}
+        _=try pf(["-o","none","-a",GuardPolicy.anchor,"-f",root+"/rules.conf"])
+        guard try canonical()==expected else{throw fail("UDP loaded rules changed")}
+    }
     public func activateRules(_ policy:GuardPolicy,expected:String) throws {
         let file=root+"/rules.conf"
         guard try String(contentsOfFile:file,encoding:.utf8)==policy.rules else{throw fail("Prepared private rule file changed")}

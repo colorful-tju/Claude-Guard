@@ -6,7 +6,7 @@ begin
   def redact(value)
     case value
     when Hash
-      value.to_h { |k, v| [k, %w[token ownReference initialReferences allowedStates].include?(k) ? '[REDACTED]' : redact(v)] }
+      value.to_h { |k, v| [k, %w[token ownReference references initialReferences allowedStates].include?(k) ? '[REDACTED]' : redact(v)] }
     when Array then value.map { |v| redact(v) }
     else value
     end

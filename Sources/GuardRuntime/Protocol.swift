@@ -8,7 +8,7 @@ public struct Settings: Codable, Sendable {
     public var confirmationFingerprint:String=""
     public init() {}
 }
-public enum GuardOperation:String,Codable,Sendable {case registerProxyConfiguration,refreshClaudeRegistration,selfTest,progress,status,inspect,verify,start,stop,shutdown,heartbeat,export,ipv6Off,ipv6Automatic,ipv6Restore}
+public enum GuardOperation:String,Codable,Sendable {case udpStart,registerProxyConfiguration,refreshClaudeRegistration,selfTest,progress,status,inspect,verify,start,stop,shutdown,heartbeat,export,ipv6Off,ipv6Automatic,ipv6Restore}
 public struct Request:Codable,Sendable {
     public var configurationPath:String?
     public var operation:GuardOperation;public var settings:Settings?
@@ -37,6 +37,7 @@ public struct HeartbeatDiagnostic:Codable,Sendable {
     public var delayed:Bool {(ageSeconds ?? 0)>=6}
 }
 public struct Status:Codable,Sendable {
+    public var protectionMode:ProtectionMode?
     public var periodicEgress:EgressDiagnostic?
     public var egressRechecking:Bool?
     public var egressWarning:EgressWarning?
@@ -121,7 +122,7 @@ public enum Wire {
         return reply
     }
     static func responseTimeout(for operation:GuardOperation)->TimeInterval {
-        if [.start,.verify,.stop,.shutdown].contains(operation){return 90}
+        if [.udpStart,.start,.verify,.stop,.shutdown].contains(operation){return 90}
         if [.refreshClaudeRegistration,.registerProxyConfiguration].contains(operation){return 60}
         if operation == .selfTest{return 15} // 8s worker + 2s curl + cleanup and reply margin.
         return 8

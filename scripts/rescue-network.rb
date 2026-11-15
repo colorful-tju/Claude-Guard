@@ -3,6 +3,7 @@
 # Fixed commands only. Never loads rules, flushes states, releases guessed
 # tokens, deletes recovery assets, restarts the helper, or changes DNS/routes.
 require 'open3'
+require 'json'
 
 override = ARGV.length == 2 && ['--force-own','--last-resort'].include?(ARGV[0]) && ARGV[1] == '--confirm-unprotected'
 ARGV.pop if override
@@ -94,6 +95,28 @@ begin
     puts "事务元数据无法核验：#{error}；保留资产，仅执行明确选择的应急 PF 操作。"
   end
 
+  udp_only = false
+  udp_path = root+'/udp-session.json'
+  if !File.exist?(root+'/session.json') && !File.symlink?(root+'/session.json') && (File.exist?(udp_path) || File.symlink?(udp_path))
+    begin
+      File.open(udp_path, File::RDONLY|File::NOFOLLOW) do |file|
+        stat = file.stat
+        raise 'UDP journal identity invalid' unless stat.file? && stat.uid == Process.euid && (stat.mode & 0077) == 0 && stat.size < 4*1024*1024
+        record = JSON.parse(file.read)
+        udp_only = record.is_a?(Hash) && record['version'] == 1 && record['policy'].is_a?(Hash) && record['policy']['sessionID'].is_a?(String)
+      end
+    rescue StandardError
+      udp_only = false
+    end
+    unless udp_only
+      raise '独立 UDP 事务损坏或无法核验；未查询/结束 Claude、未解除 PF。保留记录并重启，或明确选择 UNPROTECT 应急解除。' unless override
+      warn 'UDP 事务归属未核验；按明确应急授权解除限制，不查询或结束任何应用，不代表正常 OFF。'
+      udp_only = true
+    end
+  end
+  if udp_only
+    puts '2/4 独立 UDP 会话：不查询、不结束 Claude 或其他应用。'
+  else
   begin
   puts '2/4 尝试结束当前用户的已知 Claude/Helper；不是完整按进程身份验收。'
   uid = ENV['SUDO_UID']
@@ -111,6 +134,8 @@ begin
     raise unless mode == '--force-own' && override
     warn "进程退出未确认：#{process_error}"
     warn '已明确选择 UNPROTECT_OWN：仅解除本工具防护；Claude 可能仍在运行，不代表正常 OFF。'
+  end
+
   end
 
   puts '3/4 只清除本工具 anchor 的 filter；保留 Apple/其他规则、state、token 和事务日志。'

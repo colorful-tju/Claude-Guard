@@ -15,8 +15,8 @@ app='/Applications/ClaudeSafeLauncher.app'
 helper="/Library/PrivilegedHelperTools/$label"
 plist="/Library/LaunchDaemons/$label.plist"
 [[ ! -L "$root" && ! -L "$app" && ( ! -e "$root" || -d "$root" ) ]] || { echo '拒绝不可信安装目标'; exit 2; }
-[[ ! -e "$root/ipv6-override.json" && ! -L "$root/ipv6-override.json" && ! -e "$root/session.json" && ! -L "$root/session.json" ]] || { echo '存在安全事务，请先关闭安全模式或完成紧急恢复，不能更新。'; exit 2; }
-archive="$PWD/dist/ClaudeSafeLauncher-0.5.26-test.zip"
+[[ ! -e "$root/ipv6-override.json" && ! -L "$root/ipv6-override.json" && ! -e "$root/session.json" && ! -L "$root/session.json" && ! -e "$root/udp-session.json" && ! -L "$root/udp-session.json" ]] || { echo '存在安全事务，请先关闭安全模式或完成紧急恢复，不能更新。'; exit 2; }
+archive="$PWD/dist/ClaudeSafeLauncher-0.5.27-test.zip"
 [[ -f "$archive" && ! -L "$archive" ]] || { echo '安装资源缺失，请重新获取完整磁盘映像。'; exit 2; }
 # Separate from daemon.lock: serialize delivery changes without bypassing the
 # helper's authoritative OFF assertion under the daemon transaction lock.
@@ -130,7 +130,7 @@ if [[ ! -e "$root" ]]; then /usr/bin/install -d -o root -g wheel -m 755 "$root";
 # The prepared signed helper performs no recovery or mutation in --assert-off.
 # It uses the same fixed daemon.lock and verifies journal/marker/own anchor.
 "$source_app/Contents/Resources/guard-daemon" --assert-off
-[[ ! -e "$root/ipv6-override.json" && ! -L "$root/ipv6-override.json" && ! -e "$root/session.json" && ! -L "$root/session.json" ]] || exit 2
+[[ ! -e "$root/ipv6-override.json" && ! -L "$root/ipv6-override.json" && ! -e "$root/session.json" && ! -L "$root/session.json" && ! -e "$root/udp-session.json" && ! -L "$root/udp-session.json" ]] || exit 2
 /bin/mkdir "$task_install/backup"
 i=0
 for target in "${targets[@]}"; do

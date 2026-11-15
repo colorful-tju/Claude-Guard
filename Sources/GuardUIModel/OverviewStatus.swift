@@ -5,6 +5,7 @@ public enum BannerTone {case protected,waiting,blocked}
 extension AppModel {
     public var bannerTone:BannerTone {
         if !failure.isEmpty || state.phase=="recoveryBlocked" || interruptionAlert != nil {return .blocked}
+        if state.protectionMode == .udpOnly,state.phase=="armed",state.verified,communicationWarning.isEmpty {return .protected}
         if !communicationWarning.isEmpty || (state.phase=="armed" && (state.heartbeatDiagnostic?.delayed==true || state.egressRechecking==true || !state.processInventoryComplete)) {return .waiting}
         if state.phase=="armed" && state.verified {return .protected}
         if needsIPv6Off || guidance.severe || guidance.category=="IP 未匹配" {return .blocked}
@@ -12,7 +13,7 @@ extension AppModel {
     }
     public var bannerTitle:String {
         switch bannerTone {
-        case .protected:return "防护已验证，持续监控中"
+        case .protected:return state.protectionMode == .udpOnly ? "仅 UDP 防护已开启":"防护已验证，持续监控中"
         case .waiting:
             if !communicationWarning.isEmpty {return "助手状态响应延迟，正在重试"}
             if state.phase=="armed" && state.egressRechecking==true {return "出口待核验，PF 防护保持运行"}
