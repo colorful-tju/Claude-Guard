@@ -94,6 +94,9 @@ class EntryProbeConfigTests(unittest.TestCase):
             self.assertFalse(c[key]['enable'])
         self.assertEqual(c['dns']['listen'], '')
         self.assertEqual(c['dns']['nameserver'], [])
+        self.assertEqual(c['dns']['default-nameserver'], ['127.0.0.1:1'])
+        self.assertEqual(c['dns']['proxy-server-nameserver'], [])
+        self.assertEqual(c['dns']['direct-nameserver'], [])
         self.assertEqual(c['dns']['fallback'], [])
         for key in ('listeners', 'tunnels', 'proxy-groups', 'rules'):
             self.assertEqual(c[key], [])

@@ -33,6 +33,18 @@ struct EntryProbeTests {
         #expect(!EntryProbe.preparationMessage("password=synthetic-secret").contains("synthetic-secret"))
         #expect(EntryProbe.preparationMessage(nil).contains("未通过"))
     }
+    @Test func configurationFailureIsSpecificWithoutPrivateCoreMessage() throws {
+        for message in ["default nameserver should have at least one nameserver","password=synthetic-secret"] {
+            let bytes=try JSONSerialization.data(withJSONObject:["id":"1","result":NSNull(),"error":["code":"config_rejected","message":message]])
+            do {_=try EntryProbeFrame.response(bytes,id:"1");Issue.record("must reject")}
+            catch {
+                let description=String(describing:error)
+                #expect(description.contains("隔离配置"))
+                #expect(!description.contains("synthetic-secret"))
+                if message.hasPrefix("default") {#expect(description.contains("default-nameserver"))}
+            }
+        }
+    }
     @Test func cancellationIsExplicitAndSticky() {
         let c=EntryProbeCancellation();#expect(!c.cancelled);c.cancel();c.cancel();#expect(c.cancelled)
     }

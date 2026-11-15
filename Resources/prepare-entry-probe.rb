@@ -120,7 +120,8 @@ begin
     'external-ui-name'=>'', 'secret'=>'',
     'tun'=>{'enable'=>false,'auto-route'=>false,'auto-redirect'=>false,'auto-detect-interface'=>false,'dns-hijack'=>[]},
     'dns'=>{'enable'=>false,'listen'=>'','ipv6'=>false,'use-hosts'=>false,'use-system-hosts'=>false,
-            'default-nameserver'=>[],'nameserver'=>[],'fallback'=>[],'proxy-server-nameserver'=>[],
+            # Core validates this even with DNS disabled. No public/system bootstrap.
+            'default-nameserver'=>['127.0.0.1:1'],'nameserver'=>[],'fallback'=>[],'proxy-server-nameserver'=>[],
             'direct-nameserver'=>[],'nameserver-policy'=>{},'fallback-filter'=>{'geoip'=>false,'geosite'=>[],'ipcidr'=>[],'domain'=>[]}},
     'ntp'=>{'enable'=>false,'write-to-system'=>false}, 'sniffer'=>{'enable'=>false},
     'profile'=>{'store-selected'=>false,'store-fake-ip'=>false},

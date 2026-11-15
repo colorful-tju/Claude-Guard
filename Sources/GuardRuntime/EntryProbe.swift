@@ -40,6 +40,14 @@ enum EntryProbeFrame {
     static func response(_ bytes:Data,id:String) throws -> [String:Any]? {
         if let event=try JSONSerialization.jsonObject(with:bytes) as? [String:Any],
            Set(event.keys)==Set(["method","arguments"]),event["method"] as? String=="message",event["arguments"] is [Any] {return nil}
+        if let value=try JSONSerialization.jsonObject(with:bytes) as? [String:Any],value["id"] as? String==id,
+           let error=value["error"] as? [String:Any],error["code"] as? String=="config_rejected" {
+            // Never forward arbitrary Core messages: they may contain configuration values.
+            if error["message"] as? String=="default nameserver should have at least one nameserver" {
+                throw fail("隔离配置加载失败：Core 要求非空 default-nameserver")
+            }
+            throw fail("隔离配置被 Core 拒绝（config_rejected）")
+        }
         guard let value=try JSONSerialization.jsonObject(with:bytes) as? [String:Any],value["id"] as? String==id,value.keys.contains("result"),
               value["error"] == nil || value["error"] is NSNull,
               value["file"] == nil || value["file"] is NSNull else{throw fail("Entry probe IPC reply rejected")}
@@ -229,7 +237,7 @@ public enum EntryProbe {
         } catch {
             if cancellation.cancelled {throw fail("前置验证已取消")}
             if case GuardFailure.rejected(let message)=error {
-                let allowed=["独立前置测试超时","独立前置测试已取消或 Core 退出","独立 Core IPC 身份不符","独立 Core 未以普通用户运行","Entry probe IPC reply rejected","独立 Core IPC 接收失败","前置回显不属于指定代理测试","前置回显不是有效公网 IPv4"]
+                let allowed=["隔离配置加载失败：Core 要求非空 default-nameserver","隔离配置被 Core 拒绝（config_rejected）","独立前置测试超时","独立前置测试已取消或 Core 退出","独立 Core IPC 身份不符","独立 Core 未以普通用户运行","Entry probe IPC reply rejected","独立 Core IPC 接收失败","前置回显不属于指定代理测试","前置回显不是有效公网 IPv4"]
                 if allowed.contains(message){outcome=message}
             }
             return nil // Never emit arbitrary Core responses/configuration/credentials.
