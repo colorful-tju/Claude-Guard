@@ -74,7 +74,7 @@ begin
     reject('node-field') if node.key?('alterId') && node['alterId'] != 0
     reject('node-field') if node.key?('cipher') && !['auto','none',''].include?(node['cipher'])
     reject('node-field') if node.key?('encryption') && node['encryption'] != 'none'
-    reject('node-field') if node.key?('flow') && node['flow'] != ''
+    reject('node-field') if node.key?('flow') && ![nil, ''].include?(node['flow'])
     ws = node.fetch('ws-opts', {})
     reject('websocket') unless ws.is_a?(Hash) && (ws.keys - %w[path headers]).empty?
     path = ws.fetch('path', '/')

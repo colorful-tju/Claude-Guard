@@ -63,6 +63,18 @@ class EntryProbeConfigTests(unittest.TestCase):
         self.assertEqual(result['config']['proxies'][0]['servername'], 'entry.example.com')
         self.assertEqual(result['config']['proxies'][0]['ws-opts']['headers']['Host'], 'entry.example.com')
 
+    def test_null_flow_is_unset_but_nonempty_flow_still_rejected(self):
+        for value in (None, ''):
+            node = copy.deepcopy(NODE)
+            node['flow'] = value
+            proc, result, _ = self.invoke(node=node)
+            self.assertEqual(proc.returncode, 0, result)
+            self.assertNotIn('flow', result['config']['proxies'][0])
+        for value in ('xtls-rprx-vision', False, 0, [], {}):
+            node = copy.deepcopy(NODE)
+            node['flow'] = value
+            self.rejection(node=node)
+
     def test_tls_fallback_uses_explicit_ws_host(self):
         for value in (None, ''):
             node = copy.deepcopy(NODE)

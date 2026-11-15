@@ -63,10 +63,10 @@ public enum EntryProbe {
             guard try UDPProtection.physical(settings.physical)==physical else{throw fail("前置测试期间物理接口改变")}
             let input=try JSONSerialization.data(withJSONObject:["yaml":yaml,"nodeName":name,"entryIPv4":ip,"physical":settings.physical])
             let sanitized=try Commands().run("/usr/bin/ruby",[resources+"/prepare-entry-probe.rb"],timeout:8,input:input,cancelled:{cancellation.cancelled})
-            guard sanitized.status==0,
-                  let envelope=try JSONSerialization.jsonObject(with:Data(sanitized.output.utf8)) as? [String:Any],
+            let envelope=(try? JSONSerialization.jsonObject(with:Data(sanitized.output.utf8))) as? [String:Any]
+            guard sanitized.status==0,let envelope,
                   envelope["fingerprint"] as? String==status.fingerprint,let config=envelope["config"] as? [String:Any] else{
-                throw fail("前置节点参数不支持安全独立测试；不会降低 TLS 校验或改写原配置")
+                throw fail(preparationMessage(envelope?["errorCode"] as? String))
             }
             // Failures for individual candidates are expected (e.g. a DNS-over-HTTPS socket).
             // A result is a hint only until the daemon rechecks the live Core and startup gates.
@@ -75,6 +75,12 @@ public enum EntryProbe {
         guard !cancellation.cancelled,try UDPProtection.physical(settings.physical)==physical,
               try ProxyConfiguration.bytes(path:path,uid:getuid())==raw,try codeHash(path:core)==identity else{throw fail("前置测试结果已失效：配置、接口或 Core 改变")}
         return results
+    }
+    static func preparationMessage(_ code:String?) -> String {
+        // Fixed messages only: never forward raw parser output or credential values.
+        let reasons=["node-field":"节点可选参数格式不支持", "node-option":"节点包含未支持的选项", "transport":"节点传输协议不在支持范围", "websocket":"WebSocket 参数不在支持范围", "tls-name":"TLS 主机名无效", "uuid":"节点认证标识格式无效", "node-missing":"配置中找不到所选节点", "yaml-invalid":"配置语法或编码不支持", "socks-tls-endpoint":"SOCKS5 TLS 不支持改写域名入口", "plaintext-endpoint":"明文认证不能发送到不同的候选入口"]
+        let reason=code.flatMap{reasons[$0]} ?? "配置提取或指纹核验未通过"
+        return "前置验证未开始："+reason+"；未降低 TLS 校验或修改原配置"
     }
     static func echo(_ value:[String:Any]) throws -> String {
         guard value["error"]==nil,

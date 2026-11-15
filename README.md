@@ -4,7 +4,7 @@
 
 面向 macOS 的小型桌面工具，为通过 HTTP 代理使用 Claude Desktop 与本机 Claude Code 的用户提供临时出口限制、启动前验收与运行中监控。使用结束后，按顺序退出受保护进程并恢复本工具修改的网络状态。
 
-> **0.5.31 测试版 · macOS 14+ · 源码可见 / 非商业 / 禁止二次开发**
+> **0.5.32 测试版 · macOS 14+ · 源码可见 / 非商业 / 禁止二次开发**
 > 个人测试版安装修复，尚未完成 Apple 公证，不是 Anthropic 官方软件。作者：[colorful / @colorful-tju](https://github.com/colorful-tju)。许可见 [LICENSE](LICENSE)。
 
 ## 为什么需要它
@@ -50,7 +50,7 @@ Claude Guard 面向这样的使用场景：你已经准备好一个 **数字 IPv
 
 ### 1. 打开 DMG
 
-从 [Releases](https://github.com/colorful-tju/Claude-Guard/releases/tag/v0.5.31) 获取对应架构的 DMG：`Claude-Guard-0.5.31-macOS-AppleSilicon-arm64.dmg` 或 `Claude-Guard-0.5.31-macOS-Intel-x86_64.dmg`。分别提供 Apple Silicon 与 Intel 测试包，适用于 Mac、macOS 14 或以上；不需要 Xcode、源码或终端构建命令。macOS 26 使用系统 Liquid Glass，旧系统使用材质回退。
+从 [Releases](https://github.com/colorful-tju/Claude-Guard/releases/tag/v0.5.32) 获取对应架构的 DMG：`Claude-Guard-0.5.32-macOS-AppleSilicon-arm64.dmg` 或 `Claude-Guard-0.5.32-macOS-Intel-x86_64.dmg`。分别提供 Apple Silicon 与 Intel 测试包，适用于 Mac、macOS 14 或以上；不需要 Xcode、源码或终端构建命令。macOS 26 使用系统 Liquid Glass，旧系统使用材质回退。
 
 打开映像，按顶层说明先卸载旧版，再双击「双击安装 Claude Guard.app」；首次安装跳过卸载，**无需拖入应用程序文件夹**。根据图形提示完成管理员授权，成功后选择打开 App。更新前请先在旧版菜单栏选择「恢复并退出」。不要直接删除旧助手或恢复记录。
 
@@ -329,3 +329,8 @@ PF 与运行态核验仍通过、且本轮进程清单已经完整恢复时，�
 ## 0.5.31：修复安装资源版本错配
 
 修复 0.5.30 安装器仍引用旧 ZIP 导致“安装资源缺失”的问题。包内统一使用固定文件名，并在实际 DMG 验收中运行只读资源检查。防护及前置测试逻辑未改动。
+
+
+## 0.5.32：兼容前置节点的空 flow 参数
+
+修复 VLESS WebSocket 节点 `flow: null` 被提前拒绝的问题，等同未设置处理；非空 flow 和其他安全限制不变。解析失败改为具体且不含凭据的中文原因。

@@ -28,6 +28,11 @@ struct EntryProbeTests {
             #expect(throws:(any Error).self){try EntryProbe.echo(altered)}
         }
     }
+    @Test func preparationDiagnosticsNeverExposeRawFields() {
+        #expect(EntryProbe.preparationMessage("node-field").contains("可选参数"))
+        #expect(!EntryProbe.preparationMessage("password=synthetic-secret").contains("synthetic-secret"))
+        #expect(EntryProbe.preparationMessage(nil).contains("未通过"))
+    }
     @Test func cancellationIsExplicitAndSticky() {
         let c=EntryProbeCancellation();#expect(!c.cancelled);c.cancel();c.cancel();#expect(c.cancelled)
     }
