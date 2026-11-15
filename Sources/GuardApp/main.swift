@@ -372,7 +372,7 @@ private struct LauncherView:View {
                     if let warning=model.state.entryCandidateWarning {Text(warning).font(.caption).foregroundStyle(.orange)}
                     if let candidates=model.state.entryCandidates,!candidates.isEmpty {
                         ScrollView(.horizontal) {HStack {ForEach(candidates,id:\.self) {ip in
-                            Text("未核验连接：\(ip)").font(.caption.monospaced())
+                            Text(model.entryCandidateLabel(ip)).font(.caption.monospaced())
                         }}}
                     }
                     Text("先固定前置，再验证连接。独立测试会通过所选前置访问 IP 服务；入口与机场出口可能不同。仅支持 FLClash 0.9.3 的部分 TCP 协议；不会自动启用防护，也不代表整条链路已验证。原配置不被改写。")

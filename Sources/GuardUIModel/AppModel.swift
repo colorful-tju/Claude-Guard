@@ -14,7 +14,10 @@ import GuardCore
     @Published public var ipCheck:IPCheck?
     @Published public var testingIP=false
     @Published public var ipStale=false
-    @Published public var state=Status() {didSet{observeInterruption();observeEgressWarning();updateActivityLease()}}
+    @Published public var state=Status() {didSet{
+        if !entryProbeMessage.isEmpty && (state.fingerprint != oldValue.fingerprint || state.configurationPath != oldValue.configurationPath || state.entryProbeCoreHash != oldValue.entryProbeCoreHash) {entryProbeStale=true}
+        observeInterruption();observeEgressWarning();updateActivityLease()
+    }}
     @Published public var registrationAlert=false
     @Published public var pfIssueAlert:String?
     @Published public var interruptionAlert:ProtectionInterruption?
@@ -55,7 +58,8 @@ import GuardCore
     @Published public var settings=Settings() {didSet {
         if settings != oldValue {
             confirmation=false;ipStale=true;settingsRevision += 1
-            entryCancellation?.cancel();if !entryProbeMessage.isEmpty {entryProbeStale=true}
+            let entryChanged=settings.entryName != oldValue.entryName || settings.entryIPv4 != oldValue.entryIPv4 || settings.physical != oldValue.physical || settings.effectivePathMode != oldValue.effectivePathMode
+            entryCancellation?.cancel();if entryChanged && !entryProbeMessage.isEmpty {entryProbeStale=true}
             saveSettings()
         }
     }}
@@ -252,6 +256,10 @@ import GuardCore
             }
         }
     }
+    public func entryCandidateLabel(_ ip:String)->String {
+        let passed=entryProbeDiagnostics.last(where:{$0.candidate==ip})?.outcome=="通过"
+        return (!entryProbeStale && settings.entryIPv4==ip && passed ? "已核验入口：":"候选连接：")+ip
+    }
     public func cancelEntryProbe(){entryCancellation?.cancel()}
     public func verifyEntryConnection() {
         guard !busy,!testingIP,state.phase=="off",settings.effectivePathMode == .chain,
@@ -291,6 +299,7 @@ import GuardCore
                     if results.count==1,let result=results.first {
                         self.settings.entryIPv4=result.entry
                         self.entryProbeStale=false
+                        self.entryProbeContext=self.settings
                         self.entryProbeMessage="已匹配连接入口：\(result.entry)；本次前置回显出口：\(result.exit)。入口已填入，仍需确认端点并启动完整防护验证。"
                     } else if results.isEmpty {
                         self.entryProbeMessage="没有候选通过独立协议与连接核验。可能是节点不支持独立连接、证书校验失败或网络超时；不会猜选入口。"

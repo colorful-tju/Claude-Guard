@@ -96,6 +96,12 @@ struct EntryCoreOfflineIntegrationTests {
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:false,attributes:[.posixPermissions:0o700])
         defer{try? FileManager.default.removeItem(at:root)}
         let node:[String:Any]=["name":"synthetic","type":"vless","server":"entry.example.com","port":443,"network":"ws","tls":true,"servername":"tls.example.com","uuid":"01234567-89ab-cdef-0123-456789abcdef","ws-opts":["path":"/synthetic/path?value=1","headers":["Host":"tls.example.com"]]]
+        var tcp=node;tcp["network"]="tcp";tcp.removeValue(forKey:"ws-opts");tcp["flow"]="xtls-rprx-vision"
+        var reality=tcp;reality["reality-opts"]=["public-key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","short-id":"aabb"];reality["client-fingerprint"]="chrome"
+        let trojan:[String:Any]=["name":"synthetic","type":"trojan","server":"entry.example.com","port":443,"password":"synthetic-password","network":"tcp"]
+        var trojanWS=trojan;trojanWS["network"]="ws";trojanWS["ws-opts"]=["path":"/synthetic","headers":["Host":"front.example.com"]]
+        var trojanReality=trojan;trojanReality["reality-opts"]=reality["reality-opts"];trojanReality["client-fingerprint"]="chrome"
+        for node in [node,tcp,reality,trojan,trojanWS,trojanReality] {
         let yaml=String(data:try JSONSerialization.data(withJSONObject:["proxies":[node]],options:[.withoutEscapingSlashes]),encoding:.utf8)!
         let input=try JSONSerialization.data(withJSONObject:["yaml":yaml,"nodeName":"synthetic","entryIPv4":"1.2.3.4","physical":"en0"])
         let extracted=try Commands().run("/usr/bin/ruby",[project.appendingPathComponent("Resources/prepare-entry-probe.rb").path],timeout:8,input:input)
@@ -120,5 +126,6 @@ struct EntryCoreOfflineIntegrationTests {
         verifier.arguments=["python3",project.appendingPathComponent("scripts/test-entry-core-offline.py").path,"--core",core,"--serialized-config",payload.path]
         try verifier.run();verifier.waitUntilExit()
         #expect(verifier.terminationStatus==0)
+        }
     }
 }

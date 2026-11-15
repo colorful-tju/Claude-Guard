@@ -94,7 +94,7 @@ public enum EntryProbe {
     }
     static func preparationMessage(_ code:String?) -> String {
         // Fixed messages only: never forward raw parser output or credential values.
-        let reasons=["node-field":"节点可选参数格式不支持", "node-option":"节点包含未支持的选项", "transport":"节点传输协议不在支持范围", "websocket":"WebSocket 参数不在支持范围", "tls-name":"TLS 主机名无效", "uuid":"节点认证标识格式无效", "node-missing":"配置中找不到所选节点", "yaml-invalid":"配置语法或编码不支持", "socks-tls-endpoint":"SOCKS5 TLS 不支持改写域名入口", "plaintext-endpoint":"明文认证不能发送到不同的候选入口"]
+        let reasons=["node-type":"前置协议暂不支持独立验证；本轮支持 VLESS、Trojan、HTTP、SOCKS5 的限定 TCP 组合", "node-type-udp":"前置节点为 UDP 隧道协议（如 TUIC）；完整防护仅支持固定 TCP 前置", "reality":"Reality 仅支持 TCP；公钥须为 32 字节 base64url，short-id 须为不超过 8 字节的偶数长度十六进制", "flow":"flow 仅支持空值或 TCP 下的 xtls-rprx-vision", "alpn":"ALPN 仅支持非空 h2/http/1.1 组合，禁止 h3", "client-fingerprint":"客户端指纹不支持，或 Reality 缺少已核验的客户端指纹", "packet-encoding":"packet-encoding 不支持", "credentials":"节点认证字段格式无效", "node-field":"节点可选参数格式不支持", "node-option":"节点包含未支持的选项", "transport":"节点传输协议不在支持范围", "websocket":"WebSocket 参数不在支持范围", "tls-name":"TLS 主机名无效", "uuid":"节点认证标识格式无效", "node-missing":"配置中找不到所选节点", "yaml-invalid":"配置语法或编码不支持", "socks-tls-endpoint":"SOCKS5 TLS 不支持改写域名入口", "plaintext-endpoint":"明文认证不能发送到不同的候选入口"]
         let reason=code.flatMap{reasons[$0]} ?? "配置提取或指纹核验未通过"
         return "前置验证未开始："+reason+"；未降低 TLS 校验或修改原配置"
     }

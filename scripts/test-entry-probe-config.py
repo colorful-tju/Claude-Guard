@@ -38,6 +38,27 @@ class EntryProbeConfigTests(unittest.TestCase):
         self.assertEqual(set(result), {'errorCode'})
         self.assertRegex(result['errorCode'], r'^[a-z-]+$')
 
+    def test_tcp_reality_and_trojan_preserve_authentication(self):
+        node = copy.deepcopy(NODE)
+        node.pop('ws-opts'); node['network']='tcp'; node['flow']='xtls-rprx-vision'
+        node['reality-opts']={'public-key':'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE','short-id':'aabb'}
+        node['client-fingerprint']='chrome'; node['alpn']=['h2','http/1.1']; node['packet-encoding']='xudp'
+        proc,result,_=self.invoke(node=node)
+        self.assertEqual(proc.returncode,0,result)
+        self.assertEqual(result['config']['proxies'][0]['reality-opts'],node['reality-opts'])
+        for network in ('tcp','ws'):
+            n=dict(name='synthetic entry',type='trojan',server='entry.example.com',port=443,password='synthetic-password',network=network)
+            if network=='ws': n['ws-opts']={'headers':{'Host':'different.example.com'},'path':'/x'}
+            proc,result,_=self.invoke(node=n)
+            self.assertEqual(proc.returncode,0,result)
+            self.assertEqual(result['config']['proxies'][0]['sni'],'entry.example.com')
+
+    def test_new_protocol_boundaries(self):
+        base=dict(name='synthetic entry',type='vless',server='entry.example.com',port=443,uuid=NODE['uuid'],tls=True,network='tcp')
+        for key,value in [('alpn',['h3']),('alpn',[]),('client-fingerprint','unreviewed'),('flow','unknown'),('packet-encoding','unknown'),('reality-opts',{'public-key':'bad','short-id':'a'}),('reality-opts',{'public-key':'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE','short-id':'aabb','other':True})]:
+            n=copy.deepcopy(base);n[key]=value;self.rejection(node=n)
+        n=copy.deepcopy(base);n['network']='ws';n['reality-opts']={'public-key':'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE','short-id':''};self.rejection(node=n)
+
     def test_original_vless_shape_preserves_tls_and_host(self):
         proc, result, raw = self.invoke()
         self.assertEqual(proc.returncode, 0)

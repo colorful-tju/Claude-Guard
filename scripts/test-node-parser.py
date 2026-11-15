@@ -20,6 +20,17 @@ class ParserTests(unittest.TestCase):
   self.assertEqual(result.returncode,0)
   self.assertEqual(json.loads(result.stdout)['chain'].get('groups'),{'Front':['Region'],'Region':['Entry']})
   self.assertNotIn(b'NEVER_EMIT_SECRET',result.stdout)
+ def test_include_filters_and_candidate_count(self):
+  nodes=[{'name':n,'type':t,'server':'entry.example','port':443} for n,t in [('正常','vless'),('剩余流量','vless'),('Old SS','ss')]]
+  landing={'name':'ISP','type':'http','server':'8.8.4.4','port':80,'dialer-proxy':'Front'}
+  raw={'mode':'rule','proxies':nodes+[landing],'proxy-groups':[{'name':'Front','type':'select','include-all':True,'exclude-filter':'(?i)(剩余|到期)','exclude-type':'Shadowsocks'}]}
+  def parse(): return subprocess.run(['/usr/bin/ruby','Resources/read-node.rb','--stdin'],input=json.dumps(raw).encode(),capture_output=True)
+  result=parse();self.assertEqual(result.returncode,0)
+  self.assertEqual([x['name'] for x in json.loads(result.stdout)['chain']['entries']],['正常'])
+  raw['proxies']=[dict(nodes[0],name='node'+str(i)) for i in range(129)]+[landing]
+  self.assertEqual(json.loads(parse().stdout)['errorCode'],'chain-count')
+  raw['proxy-groups'][0]['exclude-filter']='(a+)+$'
+  self.assertEqual(json.loads(parse().stdout)['errorCode'],'chain-filter')
  def test_friend_old_config_reports_count_without_secrets(self):
   raw=json.dumps({'mode':'rule','proxies':[{'name':'private-name','type':'trojan','password':'NEVER_EMIT_SECRET'}]*22})
   result=subprocess.run(['/usr/bin/ruby','Resources/read-node.rb','--stdin'],input=raw.encode(),capture_output=True)

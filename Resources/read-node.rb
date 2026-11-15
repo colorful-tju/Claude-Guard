@@ -8,6 +8,17 @@ def reject(code, count=nil)
   puts JSON.generate(result)
   exit 1
 end
+# Deliberately bounded common RE2 subset: literal alternatives, optional enclosing
+# parentheses and leading (?i). Unsupported expressions never silently misfilter.
+def selector_filter(value)
+  reject('chain-filter') unless value.is_a?(String) && value.bytesize<=2048
+  insensitive=value.start_with?('(?i)');value=value[4..-1] if insensitive
+  value=value[1...-1] if value.start_with?('(') && value.end_with?(')')
+  reject('chain-filter') if value.match?(/[\\\[\]{}()*+?.^$]/)
+  parts=value.split('|',-1)
+  reject('chain-filter') if parts.length>128 || parts.any?{|p|p.empty? || p.bytesize>192}
+  Regexp.new(parts.map{|p|Regexp.escape(p)}.join('|'),insensitive ? Regexp::IGNORECASE : 0)
+end
 begin
   raw = ARGV.fetch(0) == '--stdin' ? STDIN.read(2_000_001) : File.binread(ARGV.fetch(0))
   reject('oversized') if raw.bytesize > 2_000_000
@@ -42,7 +53,23 @@ begin
       reject('chain-selector') unless item['type']=='select'
       members=item['proxies'] || []
       reject('chain-shape') unless members.is_a?(Array) && members.all?{|x|x.is_a?(String)}
-      members=members+nodes.reject{|x|x==n}.map{|x|x['name']} if item['include-all']==true || item['include-all-proxies']==true
+      generated=[]
+      if item['include-all']==true || item['include-all-proxies']==true
+        generated=nodes.reject{|x|x==n}
+        if item.key?('filter') && item['filter']!=''
+          include_regex=selector_filter(item['filter']);generated=generated.select{|x|include_regex.match?(x['name'])}
+        end
+      end
+      members=(members+generated.map{|x|x['name']}).uniq
+      if item.key?('exclude-filter') && item['exclude-filter']!=''
+        exclude_regex=selector_filter(item['exclude-filter']);members=members.reject{|x|exclude_regex.match?(x)}
+      end
+      if item.key?('exclude-type')
+        types=item['exclude-type'];reject('chain-filter') unless types.is_a?(String) && types.bytesize<=512
+        aliases={'shadowsocks'=>'ss','shadowsocksr'=>'ssr','socks'=>'socks5'}
+        excluded=types.downcase.split('|').map{|t|aliases.fetch(t,t)}
+        members=members.reject{|name| x=nodes.find{|node|node['name']==name};x && excluded.include?(x['type'].to_s.downcase)}
+      end
       topology[name]=members.uniq
       members.uniq.flat_map{|x|reachable.call(x,seen+[name])}
     end
@@ -55,7 +82,8 @@ begin
       e['tfo']!=true && e['mptcp']!=true
     end
     reject('chain-entry') if entries.empty?
-    reject('chain-size') if entries.length>128 || entries.any?{|e| e['name'].bytesize>192 || e['server'].bytesize>253}
+    reject('chain-count',entries.length) if entries.length>128
+    reject('chain-size') if entries.any?{|e| e['name'].bytesize>192 || e['server'].bytesize>253}
     chain={dialer:n['dialer-proxy'],groups:topology,entries:entries.map{|e|{name:e['name'],type:e['type'],server:e['server'],port:e['port']}}}
     reject('chain-size') if JSON.generate(chain).bytesize>28000
   else

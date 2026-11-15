@@ -4,6 +4,7 @@ require 'yaml'
 require 'json'
 require 'digest'
 require 'ipaddr'
+require 'base64'
 
 def reject(code)
   puts JSON.generate({errorCode: code})
@@ -59,35 +60,79 @@ begin
   node = nodes.find { |n| n['name'] == name }
   reject('node-missing') unless node
   kind = node['type']
-  reject('node-type') unless %w[vless http socks5].include?(kind)
+  reject(%w[tuic hysteria hysteria2 wireguard].include?(kind) ? 'node-type-udp' : 'node-type') unless %w[vless trojan http socks5].include?(kind)
   allowed = %w[name type server port network tls skip-cert-verify udp]
-  allowed += kind == 'vless' ? %w[uuid alterId cipher encryption flow servername ws-opts] : %w[username password sni]
+  allowed += if kind == 'vless'
+    %w[uuid alterId cipher encryption flow servername ws-opts reality-opts client-fingerprint alpn packet-encoding]
+  elsif kind == 'trojan'
+    %w[password sni ws-opts reality-opts client-fingerprint alpn]
+  else
+    %w[username password sni]
+  end
   reject('node-option') unless (node.keys - allowed).empty?
   reject('endpoint') unless host?(node['server'])
   reject('port') unless node['port'].is_a?(Integer) && node['port'].between?(1,65535)
   %w[tls udp skip-cert-verify].each { |k| reject('node-field') if node.key?(k) && ![true,false].include?(node[k]) }
   out = {'name'=>'GuardEntry', 'type'=>kind, 'server'=>ipv4, 'port'=>node['port'],
          'interface-name'=>physical, 'udp'=>false}
-  if kind == 'vless'
-    reject('transport') unless node['network'] == 'ws' && node['tls'] == true
-    reject('uuid') unless node['uuid'].is_a?(String) && node['uuid'].match?(/\A[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\z/)
-    reject('node-field') if node.key?('alterId') && node['alterId'] != 0
-    reject('node-field') if node.key?('cipher') && !['auto','none',''].include?(node['cipher'])
-    reject('node-field') if node.key?('encryption') && node['encryption'] != 'none'
-    reject('node-field') if node.key?('flow') && ![nil, ''].include?(node['flow'])
-    ws = node.fetch('ws-opts', {})
-    reject('websocket') unless ws.is_a?(Hash) && (ws.keys - %w[path headers]).empty?
-    path = ws.fetch('path', '/')
-    reject('websocket') unless path.is_a?(String) && path.bytesize.between?(1,4096) && path.start_with?('/') && !path.match?(/[\x00-\x20\x7f]/)
-    headers = ws.fetch('headers', {})
-    reject('websocket') unless headers.is_a?(Hash) && headers.keys.all? { |k| k.is_a?(String) && k.downcase == 'host' } && headers.length <= 1
-    ws_host = headers.empty? ? node['server'] : headers.values.first
-    reject('websocket') unless host?(ws_host)
-    sni = node['servername']
-    sni = headers.empty? ? node['server'] : ws_host if sni.nil? || sni == ''
+  if %w[vless trojan].include?(kind)
+    network = node.fetch('network','tcp')
+    reject('transport') unless %w[tcp ws].include?(network)
+    reject('transport') unless kind == 'trojan' ? node['tls'] != false : node['tls'] == true
+    reject('transport') if network == 'tcp' && node.key?('ws-opts')
+    if kind == 'vless'
+      reject('uuid') unless node['uuid'].is_a?(String) && node['uuid'].match?(/\A[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\z/)
+      reject('node-field') if node.key?('alterId') && node['alterId'] != 0
+      reject('node-field') if node.key?('cipher') && !['auto','none',''].include?(node['cipher'])
+      reject('node-field') if node.key?('encryption') && !['','none'].include?(node['encryption'])
+      flow=node['flow']
+      reject('flow') unless [nil,'','xtls-rprx-vision'].include?(flow) && (flow != 'xtls-rprx-vision' || network == 'tcp')
+      out['uuid']=node['uuid'];out['flow']=flow unless flow.nil? || flow.empty?
+      encoding=node['packet-encoding']
+      reject('packet-encoding') unless [nil,'','xudp','packetaddr'].include?(encoding)
+      out['packet-encoding']=encoding unless encoding.nil? || encoding.empty?
+    else
+      password=node['password']
+      reject('credentials') unless password.is_a?(String) && password.bytesize.between?(1,4096) && !password.match?(/[\x00\r\n]/)
+      out['password']=password
+    end
+    if node.key?('client-fingerprint')
+      reject('client-fingerprint') unless %w[chrome firefox safari ios android edge random].include?(node['client-fingerprint'])
+      out['client-fingerprint']=node['client-fingerprint']
+    end
+    if node.key?('alpn')
+      alpn=node['alpn']
+      reject('alpn') unless alpn.is_a?(Array) && !alpn.empty? && alpn.length<=2 && alpn.uniq==alpn && (alpn-%w[h2 http/1.1]).empty?
+      out['alpn']=alpn
+    end
+    if node.key?('reality-opts')
+      reality=node['reality-opts']
+      reject('reality') unless network=='tcp' && reality.is_a?(Hash) && (reality.keys-%w[public-key short-id]).empty?
+      key=reality['public-key'];short=reality.fetch('short-id','')
+      reject('reality') unless key.is_a?(String) && key.match?(/\A[A-Za-z0-9_-]{43}\z/) && Base64.urlsafe_decode64(key).bytesize==32 && Base64.urlsafe_encode64(Base64.urlsafe_decode64(key),padding:false)==key
+      reject('reality') unless short.is_a?(String) && short.bytesize<=16 && short.bytesize.even? && short.match?(/\A[0-9a-fA-F]*\z/)
+      reject('client-fingerprint') unless out['client-fingerprint']
+      out['reality-opts']={'public-key'=>key,'short-id'=>short}
+    end
+    sni_key=kind=='trojan' ? 'sni' : 'servername'
+    sni=node[sni_key]
+    explicit_host=nil
+    if network=='ws'
+      ws=node.fetch('ws-opts',{})
+      reject('websocket') unless ws.is_a?(Hash) && (ws.keys-%w[path headers]).empty?
+      path=ws.fetch('path','/')
+      reject('websocket') unless path.is_a?(String) && path.bytesize.between?(1,4096) && path.start_with?('/') && !path.match?(/[\x00-\x20\x7f]/)
+      headers=ws.fetch('headers',{})
+      reject('websocket') unless headers.is_a?(Hash) && headers.keys.all?{|k| k.is_a?(String) && k.downcase=='host'} && headers.length<=1
+      explicit_host=headers.values.first unless headers.empty?
+      # Fixed Core defaults: Trojan's WS Host falls back to SNI, VLESS to server.
+      ws_host=explicit_host || (kind=='trojan' && sni.is_a?(String) && !sni.empty? ? sni : node['server'])
+      reject('websocket') unless host?(ws_host)
+      out['ws-opts']={'path'=>path,'headers'=>{'Host'=>ws_host}}
+    end
+    sni=(kind=='vless' && network=='ws' && explicit_host ? explicit_host : node['server']) if sni.nil? || sni==''
     reject('tls-name') unless host?(sni)
-    out.merge!('uuid'=>node['uuid'], 'network'=>'ws', 'tls'=>true, 'servername'=>sni,
-               'skip-cert-verify'=>false, 'ws-opts'=>{'path'=>path,'headers'=>{'Host'=>ws_host}})
+    out.merge!('network'=>network,'tls'=>true,sni_key=>sni,'skip-cert-verify'=>false)
   else
     reject('transport') unless !node.key?('network') || node['network'] == 'tcp'
     %w[username password].each do |k|

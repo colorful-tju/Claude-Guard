@@ -63,11 +63,12 @@ if __name__=='__main__':
         config=json.loads(wire)
         assert config['dns']['enable'] is False and config['tun']['enable'] is False
         old_wire=wire.replace('/',r'\/')
-        failure=run(args.core,config,old_wire)
-        assert failure.get('error',{}).get('message')=='yaml: found unknown escape character',failure
+        if old_wire != wire:
+            failure=run(args.core,config,old_wire)
+            assert failure.get('error',{}).get('message')=='yaml: found unknown escape character',failure
         success=run(args.core,config,wire)
         assert success.get('error') is None and 'result' in success,success
-        print('PASS: production Swift FIFO bytes loaded; escaped-slash negative rejected; IP network denied')
+        print('PASS: production Swift FIFO bytes loaded; slash negative checked when applicable; IP network denied')
         raise SystemExit(0)
     node={'name':'synthetic','type':'vless','server':'entry.example.com','port':443,'network':'ws','tls':True,'servername':'tls.example.com','flow':None,'uuid':'01234567-89ab-cdef-0123-456789abcdef','ws-opts':{'path':'/synthetic','headers':{'Host':'tls.example.com'}}}
     request=dict(yaml=json.dumps({'proxies':[node]}),nodeName='synthetic',entryIPv4='1.2.3.4',physical='en0')

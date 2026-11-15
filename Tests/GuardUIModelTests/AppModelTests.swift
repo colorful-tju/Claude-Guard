@@ -224,9 +224,23 @@ struct EntryProbePresentationTests {
         #expect(model.entryProbeDiagnostics.count==1)
         model.settings.expectedEgress="8.8.4.4"
         #expect(model.entryProbeMessage=="没有候选通过")
+        #expect(!model.entryProbeStale) // final egress does not alter the entry protocol test
+        model.settings.entryName="another"
         #expect(model.entryProbeStale)
         let data=try? JSONEncoder().encode(model.entryProbeDiagnostics)
         #expect(data != nil)
         #expect(!model.confirmation)
+    }
+}
+
+struct EntryCandidateLabelTests {
+    @Test @MainActor func onlyFreshSelectedSuccessIsVerified() {
+        let model=AppModel(autoPoll:false,preferences:nil)
+        model.settings.entryIPv4="1.2.3.4"
+        model.entryProbeDiagnostics=[.init(candidate:"1.2.3.4",stage:"物理连接证据核验",outcome:"通过")]
+        #expect(model.entryCandidateLabel("1.2.3.4").hasPrefix("已核验入口"))
+        #expect(model.entryCandidateLabel("8.8.8.8").hasPrefix("候选连接"))
+        model.entryProbeStale=true
+        #expect(model.entryCandidateLabel("1.2.3.4").hasPrefix("候选连接"))
     }
 }
