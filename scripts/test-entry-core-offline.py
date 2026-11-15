@@ -6,7 +6,7 @@ No existing IPC, user profile, PF, TUN, system proxy or real probe is used.
 import argparse,copy,json,os,pathlib,socket,struct,subprocess,tempfile,threading,time
 root=pathlib.Path(__file__).resolve().parents[1]
 
-def run(core, config):
+def run(core, config, serialized=None):
     with tempfile.TemporaryDirectory(prefix='cg-offline-',dir='/private/tmp') as td:
         home=pathlib.Path(td);binary=home/'core'
         binary.write_bytes(core.read_bytes());binary.chmod(0o700)
@@ -44,7 +44,7 @@ def run(core, config):
             def feed():
                 with open(home/'config.yaml','w') as writer:
                     os.unlink(home/'config.yaml')
-                    writer.write(json.dumps(config))
+                    writer.write(serialized if serialized is not None else json.dumps(config))
             thread=threading.Thread(target=feed,daemon=True);thread.start()
             result=rpc('2','config.setup',{'selected-map':{},'options':{'skip-cert-verify':False}})
             thread.join(timeout=1);assert not thread.is_alive(),'config FIFO incomplete'
@@ -56,8 +56,19 @@ def run(core, config):
             except subprocess.TimeoutExpired:process.kill();process.wait()
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--core',type=pathlib.Path,required=True);args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--core',type=pathlib.Path,required=True);parser.add_argument('--serialized-config',type=pathlib.Path);args=parser.parse_args()
     if os.getuid()==0 or os.geteuid()!=os.getuid():raise SystemExit('Run as an unprivileged user')
+    if args.serialized_config:
+        wire=args.serialized_config.read_text()
+        config=json.loads(wire)
+        assert config['dns']['enable'] is False and config['tun']['enable'] is False
+        old_wire=wire.replace('/',r'\/')
+        failure=run(args.core,config,old_wire)
+        assert failure.get('error',{}).get('message')=='yaml: found unknown escape character',failure
+        success=run(args.core,config,wire)
+        assert success.get('error') is None and 'result' in success,success
+        print('PASS: production Swift FIFO bytes loaded; escaped-slash negative rejected; IP network denied')
+        raise SystemExit(0)
     node={'name':'synthetic','type':'vless','server':'entry.example.com','port':443,'network':'ws','tls':True,'servername':'tls.example.com','flow':None,'uuid':'01234567-89ab-cdef-0123-456789abcdef','ws-opts':{'path':'/synthetic','headers':{'Host':'tls.example.com'}}}
     request=dict(yaml=json.dumps({'proxies':[node]}),nodeName='synthetic',entryIPv4='1.2.3.4',physical='en0')
     extracted=subprocess.run(['/usr/bin/ruby',str(root/'Resources/prepare-entry-probe.rb')],input=json.dumps(request),text=True,capture_output=True,check=True)

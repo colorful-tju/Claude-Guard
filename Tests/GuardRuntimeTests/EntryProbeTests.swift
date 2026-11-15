@@ -59,8 +59,9 @@ struct EntryProbePipeTests {
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:false,attributes:[.posixPermissions:0o700])
         defer{try? FileManager.default.removeItem(at:root)}
         let file=root.appendingPathComponent("config.yaml").path
-        let bytes=Data(repeating:65,count:60_000)
-        let writer=try EntryProbeConfigPipe(path:file,bytes:bytes)
+        let config:[String:Any] = ["path":"/synthetic/path?value=中文", "credential":"quote\"backslash\\end", "padding":String(repeating:"a",count:50_000)]
+        let bytes=try JSONSerialization.data(withJSONObject:config)
+        let writer=try EntryProbeConfigPipe(path:file,config:config)
         try writer.pump() // no reader: must return without hanging or writing a file
         #expect(!writer.completed)
         let process=Process(),output=Pipe()
@@ -76,11 +77,48 @@ struct EntryProbePipeTests {
         #expect(!FileManager.default.fileExists(atPath:file))
         if !writer.completed {process.terminate()}
         process.waitUntilExit();#expect(group.wait(timeout:.now()+3) == .success)
-        #expect(received.get()==bytes)
+        #expect(try JSONSerialization.jsonObject(with:received.get()) as? NSDictionary == JSONSerialization.jsonObject(with:bytes) as? NSDictionary)
+        #expect(!String(decoding:received.get(),as:UTF8.self).contains("\\/"))
     }
 }
 private final class LockedProbeData:@unchecked Sendable {
     let lock=NSLock();var data=Data()
     func set(_ value:Data){lock.lock();data=value;lock.unlock()}
     func get()->Data{lock.lock();defer{lock.unlock()};return data}
+}
+
+struct EntryCoreOfflineIntegrationTests {
+    // Opt-in because this requires the explicitly selected installed Core.
+    @Test func productionConfigPipeLoadsInNetworkDeniedCore() throws {
+        guard let core=ProcessInfo.processInfo.environment["CG_ENTRY_OFFLINE_CORE"] else{return}
+        let project=URL(fileURLWithPath:#filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:false,attributes:[.posixPermissions:0o700])
+        defer{try? FileManager.default.removeItem(at:root)}
+        let node:[String:Any]=["name":"synthetic","type":"vless","server":"entry.example.com","port":443,"network":"ws","tls":true,"servername":"tls.example.com","uuid":"01234567-89ab-cdef-0123-456789abcdef","ws-opts":["path":"/synthetic/path?value=1","headers":["Host":"tls.example.com"]]]
+        let yaml=String(data:try JSONSerialization.data(withJSONObject:["proxies":[node]],options:[.withoutEscapingSlashes]),encoding:.utf8)!
+        let input=try JSONSerialization.data(withJSONObject:["yaml":yaml,"nodeName":"synthetic","entryIPv4":"1.2.3.4","physical":"en0"])
+        let extracted=try Commands().run("/usr/bin/ruby",[project.appendingPathComponent("Resources/prepare-entry-probe.rb").path],timeout:8,input:input)
+        #expect(extracted.status==0)
+        let envelope=try JSONSerialization.jsonObject(with:Data(extracted.output.utf8)) as! [String:Any]
+        let writer=try EntryProbeConfigPipe(path:root.appendingPathComponent("config.yaml").path,config:envelope["config"] as! [String:Any])
+        let reader=Process(),output=Pipe()
+        reader.executableURL=URL(fileURLWithPath:"/bin/cat");reader.arguments=[writer.path];reader.standardOutput=output
+        try reader.run()
+        let received=LockedProbeData(),group=DispatchGroup();group.enter()
+        DispatchQueue.global().async {received.set(output.fileHandleForReading.readDataToEndOfFile());group.leave()}
+        let deadline=ProcessInfo.processInfo.systemUptime+3
+        while !writer.completed && ProcessInfo.processInfo.systemUptime<deadline {try writer.pump();Thread.sleep(forTimeInterval:0.001)}
+        if !writer.completed {reader.terminate()}
+        reader.waitUntilExit()
+        #expect(writer.completed)
+        #expect(group.wait(timeout:.now()+3) == .success)
+        let payload=root.appendingPathComponent("synthetic-wire.json")
+        try received.get().write(to:payload)
+        let verifier=Process()
+        verifier.executableURL=URL(fileURLWithPath:"/usr/bin/env")
+        verifier.arguments=["python3",project.appendingPathComponent("scripts/test-entry-core-offline.py").path,"--core",core,"--serialized-config",payload.path]
+        try verifier.run();verifier.waitUntilExit()
+        #expect(verifier.terminationStatus==0)
+    }
 }

@@ -134,7 +134,7 @@ public enum EntryProbe {
         try binary.write(to:URL(fileURLWithPath:executable),options:.withoutOverwriting)
         guard chmod(executable,0o700)==0,try codeHash(path:executable)==identity,try codeHash(path:core)==identity else{throw fail("隔离 Core 身份核验失败")}
         let configFile=dir+"/config.yaml"
-        let configPipe=try EntryProbeConfigPipe(path:configFile,bytes:JSONSerialization.data(withJSONObject:config))
+        let configPipe=try EntryProbeConfigPipe(path:configFile,config:config)
         var sendConfig=false
         listener=csg_listen(socketPath,getuid())
         guard listener>=0,fcntl(listener,F_SETFD,FD_CLOEXEC)==0 else{throw fail("独立 Core IPC 创建失败")}
@@ -253,6 +253,11 @@ final class EntryProbeConfigPipe {
     private var fd:Int32 = -1
     private var offset=0
     private(set) var completed=false
+    // The Core reads this stream as YAML, not JSON. JSON's optional \/ escape
+    // is rejected by its YAML parser. Keep all other string escaping intact.
+    convenience init(path:String,config:[String:Any]) throws {
+        try self.init(path:path,bytes:JSONSerialization.data(withJSONObject:config,options:[.withoutEscapingSlashes]))
+    }
     init(path:String,bytes:Data) throws {
         guard !bytes.isEmpty,bytes.count<=64*1024,mkfifo(path,0o600)==0 else{throw fail("独立配置管道创建失败")}
         self.path=path;self.data=bytes
