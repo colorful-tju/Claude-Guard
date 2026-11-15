@@ -355,15 +355,17 @@ private struct LauncherView:View {
                     }
                     HStack {
                         TextField("固定前置公网 IPv4",text:Binding(get:{model.settings.entryIPv4 ?? ""},set:{model.settings.entryIPv4=$0}))
-                        Button("读取前置连接"){model.confirmation=false;model.request(.inspect)}
+                        Button(model.testingEntry ? "正在验证…":"验证前置连接"){model.verifyEntryConnection()}.disabled(model.busy || model.testingIP || model.state.phase != "off")
+
                     }
+                    if !model.entryProbeMessage.isEmpty {Text(model.entryProbeMessage).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)}
                     if let warning=model.state.entryCandidateWarning {Text(warning).font(.caption).foregroundStyle(.orange)}
                     if let candidates=model.state.entryCandidates,!candidates.isEmpty {
                         ScrollView(.horizontal) {HStack {ForEach(candidates,id:\.self) {ip in
-                            Button(ip){model.settings.entryIPv4=ip}.buttonStyle(.bordered)
+                            Text("未核验连接：\(ip)").font(.caption.monospaced())
                         }}}
                     }
-                    Text("先在代理软件固定前置，再读取连接并核对 IPv4。候选只证明该 Core 有连接，多个候选时勿猜选；端口取自配置。域名不被改写，IP 变化需关闭防护后重新确认。请选择包含扩展脚本结果的生成配置。")
+                    Text("先固定前置，再验证连接。独立测试会通过所选前置访问 IP 服务；入口与机场出口可能不同。仅支持 FLClash 0.9.3 的部分 TCP 协议；不会自动启用防护，也不代表整条链路已验证。原配置不被改写。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Text("最终 ISP（以下网关不是前置机场）").font(.caption.bold())
@@ -383,6 +385,7 @@ private struct LauncherView:View {
                 Text("候选网关：\(model.state.gateway)\n指纹：\(model.state.fingerprint)").font(.caption.monospaced()).textSelection(.enabled)
                 endpointButton
             }.disabled(model.state.phase != "off" || model.busy)
+            if model.testingEntry {Button("取消前置验证"){model.cancelEntryProbe()}.buttonStyle(.bordered)}
             ipv6Panel
         }
     }

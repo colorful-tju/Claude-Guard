@@ -41,6 +41,8 @@ public struct HeartbeatDiagnostic:Codable,Sendable {
     public var delayed:Bool {(ageSeconds ?? 0)>=6}
 }
 public struct Status:Codable,Sendable {
+    public var entryProbeCorePath:String?
+    public var entryProbeCoreHash:String?
     public var entryCandidates:[String]?
     public var entryCandidateWarning:String?
     public var chainCandidate:ChainConfiguration?

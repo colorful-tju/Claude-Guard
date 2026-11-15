@@ -128,6 +128,7 @@ public final class Controller: @unchecked Sendable {
         let n=try inspector.node();status.configurationError=nil;status.gateway="\(n.server):\(n.port)";status.fingerprint=n.fingerprint;status.chainCandidate=n.chain
         let inventory=effects.inventory()
         try status.applyPreview(inventory,uid:installation.uid,allowPartial:journal == nil || status.phase=="recoveryBlocked",known:previousHealthy?.claudeProcesses ?? [],corePath:installation.registeredCorePath)
+        status.entryProbeCorePath=installation.registeredCorePath;status.entryProbeCoreHash=installation.coreHash
         status.entryCandidates=[];status.entryCandidateWarning=nil
         if let previewSettings,previewSettings.effectivePathMode == .chain {
             do {status.entryCandidates=try inspector.physicalEntryCandidates(settings:previewSettings)}

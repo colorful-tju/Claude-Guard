@@ -1,0 +1,138 @@
+# PRIVATE successful output: contains proxy credentials. Never log stdout.
+# Pure stdin -> stdout extraction; no files, sockets, subprocesses or core invocation.
+require 'yaml'
+require 'json'
+require 'digest'
+require 'ipaddr'
+
+def reject(code)
+  puts JSON.generate({errorCode: code})
+  exit 1
+end
+
+def public_ipv4?(value)
+  return false unless value.is_a?(String) && value.match?(/\A[0-9]+(?:\.[0-9]+){3}\z/)
+  return false unless value.split('.').all? { |p| p.to_i.between?(0,255) && p.to_i.to_s == p }
+  ip = IPAddr.new(value)
+  # Exclude private, link-local, shared, multicast, reserved and documentation ranges.
+  %w[0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16
+     172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.88.99.0/24 192.168.0.0/16
+     198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4].none? { |r| IPAddr.new(r).include?(ip) }
+end
+
+def host?(value)
+  return false unless value.is_a?(String) && value.bytesize.between?(1,253)
+  return public_ipv4?(value) if value.match?(/\A[0-9.]+\z/)
+  value.split('.', -1).length >= 2 && value.split('.', -1).all? { |label| label.bytesize.between?(1,63) && label.match?(/\A[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\z/) }
+end
+
+begin
+  input = STDIN.read(12_000_001)
+  reject('oversized') if input.bytesize > 12_000_000
+  request = JSON.parse(input)
+  reject('input-shape') unless request.is_a?(Hash) && request.keys.sort == %w[entryIPv4 nodeName physical yaml]
+  raw, name, ipv4, physical = request.values_at('yaml', 'nodeName', 'entryIPv4', 'physical')
+  reject('input-shape') unless raw.is_a?(String) && name.is_a?(String) && name.bytesize.between?(1,192)
+  reject('oversized') if raw.bytesize > 2_000_000
+  reject('entry-ipv-four') unless public_ipv4?(ipv4)
+  reject('physical-interface') unless physical.is_a?(String) && physical.match?(/\Aen(?:0|[1-9][0-9]{0,3})\z/)
+  stream = Psych.parse_stream(raw)
+  reject('yaml-documents') unless stream.children.length == 1
+  walk = lambda do |ast, depth|
+    reject('yaml-depth') if depth > 64
+    reject('yaml-alias') if ast.is_a?(Psych::Nodes::Alias)
+    if ast.is_a?(Psych::Nodes::Mapping)
+      keys = ast.children.each_slice(2).map do |k, _|
+        reject('yaml-key') unless k.is_a?(Psych::Nodes::Scalar)
+        k.value
+      end
+      reject('yaml-duplicate') unless keys.uniq.length == keys.length
+    end
+    (ast.children || []).each { |child| walk.call(child, depth + 1) }
+  end
+  walk.call(stream.children.first, 0)
+  data = YAML.safe_load(raw, permitted_classes: [], aliases: false)
+  reject('root-shape') unless data.is_a?(Hash)
+  nodes = data['proxies']
+  reject('proxies-shape') unless nodes.is_a?(Array) && nodes.all? { |n| n.is_a?(Hash) && n['name'].is_a?(String) }
+  reject('node-ambiguous') unless nodes.map { |n| n['name'] }.uniq.length == nodes.length
+  node = nodes.find { |n| n['name'] == name }
+  reject('node-missing') unless node
+  kind = node['type']
+  reject('node-type') unless %w[vless http socks5].include?(kind)
+  allowed = %w[name type server port network tls skip-cert-verify udp]
+  allowed += kind == 'vless' ? %w[uuid alterId cipher encryption flow servername ws-opts] : %w[username password sni]
+  reject('node-option') unless (node.keys - allowed).empty?
+  reject('endpoint') unless host?(node['server'])
+  reject('port') unless node['port'].is_a?(Integer) && node['port'].between?(1,65535)
+  %w[tls udp skip-cert-verify].each { |k| reject('node-field') if node.key?(k) && ![true,false].include?(node[k]) }
+  out = {'name'=>'GuardEntry', 'type'=>kind, 'server'=>ipv4, 'port'=>node['port'],
+         'interface-name'=>physical, 'udp'=>false}
+  if kind == 'vless'
+    reject('transport') unless node['network'] == 'ws' && node['tls'] == true
+    reject('uuid') unless node['uuid'].is_a?(String) && node['uuid'].match?(/\A[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\z/)
+    reject('node-field') if node.key?('alterId') && node['alterId'] != 0
+    reject('node-field') if node.key?('cipher') && !['auto','none',''].include?(node['cipher'])
+    reject('node-field') if node.key?('encryption') && node['encryption'] != 'none'
+    reject('node-field') if node.key?('flow') && node['flow'] != ''
+    ws = node.fetch('ws-opts', {})
+    reject('websocket') unless ws.is_a?(Hash) && (ws.keys - %w[path headers]).empty?
+    path = ws.fetch('path', '/')
+    reject('websocket') unless path.is_a?(String) && path.bytesize.between?(1,4096) && path.start_with?('/') && !path.match?(/[\x00-\x20\x7f]/)
+    headers = ws.fetch('headers', {})
+    reject('websocket') unless headers.is_a?(Hash) && headers.keys.all? { |k| k.is_a?(String) && k.downcase == 'host' } && headers.length <= 1
+    ws_host = headers.empty? ? node['server'] : headers.values.first
+    reject('websocket') unless host?(ws_host)
+    sni = node['servername']
+    sni = headers.empty? ? node['server'] : ws_host if sni.nil? || sni == ''
+    reject('tls-name') unless host?(sni)
+    out.merge!('uuid'=>node['uuid'], 'network'=>'ws', 'tls'=>true, 'servername'=>sni,
+               'skip-cert-verify'=>false, 'ws-opts'=>{'path'=>path,'headers'=>{'Host'=>ws_host}})
+  else
+    reject('transport') unless !node.key?('network') || node['network'] == 'tcp'
+    %w[username password].each do |k|
+      next unless node.key?(k)
+      reject('credentials') unless node[k].is_a?(String) && node[k].bytesize <= 4096 && !node[k].match?(/[\x00\r\n]/)
+      out[k] = node[k]
+    end
+    reject('tls-name') if kind == 'socks5' && node.key?('sni')
+    if node['tls'] == true
+      # This Core's SOCKS adapter uses server itself for TLS, without SNI override.
+      reject('socks-tls-endpoint') if kind == 'socks5' && node['server'] != ipv4
+      sni = node.fetch('sni', node['server'])
+      reject('tls-name') unless host?(sni)
+      out.merge!('tls'=>true,'skip-cert-verify'=>false)
+      out['sni'] = sni if kind == 'http'
+    else
+      # Without authenticated TLS, never send credentials to an alternate IP.
+      reject('plaintext-endpoint') unless public_ipv4?(node['server']) && node['server'] == ipv4
+      reject('tls-name') if node.key?('sni')
+      out['tls'] = false
+    end
+  end
+  config = {
+    'port'=>0, 'socks-port'=>0, 'mixed-port'=>0, 'redir-port'=>0, 'tproxy-port'=>0,
+    'allow-lan'=>false, 'bind-address'=>'127.0.0.1', 'ipv6'=>false,
+    'mode'=>'rule', 'log-level'=>'silent', 'find-process-mode'=>'off',
+    'interface-name'=>physical, 'disable-keep-alive'=>true,
+    'external-controller'=>'', 'external-controller-tls'=>'', 'external-controller-unix'=>'',
+    'external-controller-pipe'=>'', 'external-ui'=>'', 'external-ui-url'=>'',
+    'external-ui-name'=>'', 'secret'=>'',
+    'tun'=>{'enable'=>false,'auto-route'=>false,'auto-redirect'=>false,'auto-detect-interface'=>false,'dns-hijack'=>[]},
+    'dns'=>{'enable'=>false,'listen'=>'','ipv6'=>false,'use-hosts'=>false,'use-system-hosts'=>false,
+            'default-nameserver'=>[],'nameserver'=>[],'fallback'=>[],'proxy-server-nameserver'=>[],
+            'direct-nameserver'=>[],'nameserver-policy'=>{},'fallback-filter'=>{'geoip'=>false,'geosite'=>[],'ipcidr'=>[],'domain'=>[]}},
+    'ntp'=>{'enable'=>false,'write-to-system'=>false}, 'sniffer'=>{'enable'=>false},
+    'profile'=>{'store-selected'=>false,'store-fake-ip'=>false},
+    'geo-auto-update'=>false, 'geodata-mode'=>false, 'geox-url'=>{},
+    'hosts'=>{}, 'listeners'=>[], 'tunnels'=>[], 'proxy-providers'=>{}, 'rule-providers'=>{},
+    'proxies'=>[out], 'proxy-groups'=>[], 'rules'=>[]
+  }
+  puts JSON.generate({config: config, fingerprint: Digest::SHA256.hexdigest(raw)})
+rescue JSON::ParserError
+  reject('input-invalid')
+rescue Psych::Exception, ArgumentError, EncodingError
+  reject('yaml-invalid')
+rescue StandardError, SystemStackError
+  reject('extractor-error')
+end

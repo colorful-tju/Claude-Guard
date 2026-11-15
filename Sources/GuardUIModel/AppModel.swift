@@ -5,6 +5,9 @@ import GuardRuntime
 import GuardCore
 
 @MainActor public final class AppModel:ObservableObject {
+    @Published public var entryProbeMessage=""
+    @Published public var testingEntry=false
+    private var entryCancellation:EntryProbeCancellation?
     @Published public var ipCheck:IPCheck?
     @Published public var testingIP=false
     @Published public var ipStale=false
@@ -48,6 +51,7 @@ import GuardCore
     }
     @Published public var settings=Settings() {didSet {
         confirmation=false;ipStale=true;settingsRevision += 1
+        entryCancellation?.cancel();entryProbeMessage=""
         saveSettings()
     }}
     @Published public var onboardingComplete=false
@@ -174,7 +178,7 @@ import GuardCore
         }
     }
     @discardableResult public func request(_ operation:GuardOperation,configurationPath:String?=nil,currentChain:FlClashCurrentChain?=nil)->Task<Void,Never>? {
-        if [.stop,.shutdown].contains(operation) {guard !stopping else{return nil};stopping=true}
+        if [.stop,.shutdown].contains(operation) {guard !stopping else{return nil};entryCancellation?.cancel();stopping=true}
         else {guard !busy else{return nil}}
         if [.refreshClaudeRegistration,.registerProxyConfiguration].contains(operation) {guard state.phase=="off" else{return nil}}
         // Clear before transport: commit may succeed even if its reply is lost or superseded by OFF.
@@ -239,6 +243,55 @@ import GuardCore
                     if operation == .refreshClaudeRegistration {self.registrationAlert=true}
                     // A lost reply does not prove the daemon stopped. Request cancellation independently.
                     if [.udpStart,.start,.verify].contains(operation){self.request(.stop)}
+                }
+            }
+        }
+    }
+    public func cancelEntryProbe(){entryCancellation?.cancel()}
+    public func verifyEntryConnection() {
+        guard !busy,!testingIP,state.phase=="off",settings.effectivePathMode == .chain,
+              let resources=Bundle.main.resourcePath else{return}
+        busy=true;testingEntry=true;confirmation=false;failure=""
+        entryProbeMessage="正在验证所选节点的协议、物理源地址和活动连接；不会切换代理。"
+        let cancellation=EntryProbeCancellation();entryCancellation=cancellation
+        revision+=1;let probeRevision=revision
+        let saved=settings,configVersion=settingsRevision,call=transport
+        Task.detached { [weak self] in
+            do {
+                let before=try call(Request(.inspect,settings:saved))
+                guard before.ok,before.status.phase=="off" else{throw fail("请先关闭防护并重新检测配置")}
+                let results=try EntryProbe.run(status:before.status,settings:saved,resources:resources,cancellation:cancellation)
+                let after=try call(Request(.inspect,settings:saved))
+                guard !cancellation.cancelled,after.ok,after.status.phase=="off",
+                      after.status.fingerprint==before.status.fingerprint,
+                      after.status.entryProbeCoreHash==before.status.entryProbeCoreHash,
+                      after.status.entryProbeCorePath==before.status.entryProbeCorePath,
+                      after.status.configurationPath==before.status.configurationPath,
+                      after.status.chainCandidate==before.status.chainCandidate,
+                      results.allSatisfy({after.status.entryCandidates?.contains($0.entry)==true}) else{throw fail("前置验证结果已失效，请确认当前连接后重试")}
+                await MainActor.run {
+                    guard let self else{return}
+                    self.testingEntry=false;self.entryCancellation=nil
+                    guard self.revision==probeRevision else{return}
+                    self.busy=false
+                    guard self.settingsRevision==configVersion,self.state.phase=="off" else{self.entryProbeMessage="设置或防护状态改变，结果已丢弃";return}
+                    self.state=after.status
+                    if results.count==1,let result=results.first {
+                        self.settings.entryIPv4=result.entry
+                        self.entryProbeMessage="已匹配连接入口：\(result.entry)；本次前置回显出口：\(result.exit)。入口已填入，仍需确认端点并启动完整防护验证。"
+                    } else if results.isEmpty {
+                        self.entryProbeMessage="没有候选通过独立协议与连接核验。可能是节点不支持独立连接、证书校验失败或网络超时；不会猜选入口。"
+                    } else {
+                        self.entryProbeMessage="多个入口通过测试，未自动填写："+results.map{"\($0.entry)（出口 \($0.exit)）"}.joined(separator:"；")
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self else{return}
+                    self.testingEntry=false;self.entryCancellation=nil
+                    guard self.revision==probeRevision else{return}
+                    self.busy=false
+                    self.entryProbeMessage=String(describing:error)
                 }
             }
         }

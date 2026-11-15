@@ -44,3 +44,5 @@ python3 scripts/test-preferences-reset.py
 
 python3 scripts/test-node-parser.py
 python3 scripts/test-profile-summaries.py
+
+python3 scripts/test-entry-probe-config.py
