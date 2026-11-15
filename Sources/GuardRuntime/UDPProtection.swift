@@ -14,7 +14,7 @@ struct UDPJournal:Codable {
     var stage="prepared"
 }
 
-/// Independent transaction. No process inventory, Claude launch or signal APIs.
+/// Independent transaction. No Claude lifecycle or signal APIs; Core/TUN identity is read-only.
 /// A separate journal makes lifecycle ownership explicit even after daemon restart.
 final class UDPProtection {
     let pf:PacketFilter
@@ -22,6 +22,10 @@ final class UDPProtection {
     let root:String
     private let physicalReader:(String)throws->InterfaceIdentity
     private let probeRunner:(ProbeKind,InterfaceIdentity,@escaping ControllerCancellation)throws->ProbeResult
+    private let tunReader:()throws->UDPDNSTUN?
+    private let connectivityRunner:(@escaping ControllerCancellation)throws->Void
+    private var expectedTUN:UDPDNSTUN?
+    private var tunCaptured=false
     private let bootReader:()->String
     private let dhcpReader:(String)throws->String?
     private(set) var journal:UDPJournal?
@@ -33,9 +37,21 @@ final class UDPProtection {
     init(commands:Commands,root:String=Paths.root,pf:PacketFilter?=nil,owner:UInt32=0,
          physicalReader:@escaping (String)throws->InterfaceIdentity=UDPProtection.physical,
          bootReader:@escaping ()->String=bootID,
+         tunReader:@escaping ()throws->UDPDNSTUN?={nil},
+         connectivityRunner:((@escaping ControllerCancellation)throws->Void)?=nil,
          dhcpReader:((String)throws->String?)?=nil,
          probeRunner:((ProbeKind,InterfaceIdentity,@escaping ControllerCancellation)throws->ProbeResult)?=nil) throws {
         self.commands=commands;self.root=root;self.pf=pf ?? PacketFilter(commands:commands,root:root)
+        self.tunReader=tunReader
+        self.connectivityRunner=connectivityRunner ?? {cancelled in
+            var failures:[String]=[]
+            for service in EgressService.allCases {
+                guard !cancelled() else{throw fail("UDP protection: cancelled")}
+                do {_=try ProbeExecutor.egress(service:service,commands:commands,cancelled:cancelled);return}
+                catch {failures.append(String(describing:error))}
+            }
+            throw fail("UDP 防护加载后 DNS/HTTPS 可用性检查失败；将撤回本次防护："+failures.joined(separator:"; "))
+        }
         self.physicalReader=physicalReader;self.bootReader=bootReader
         self.dhcpReader=dhcpReader ?? {name in
             let result=try commands.run("/usr/sbin/ipconfig",["getoption",name,"server_identifier"],timeout:3)
@@ -89,7 +105,8 @@ final class UDPProtection {
               !FileManager.default.fileExists(atPath:root+"/enable-result.txt"),
               try pf.canonical().trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{throw fail("UDP protection: stop or recover the existing session first")}
         let identity=try physicalReader(physical)
-        let policy=try UDPOnlyPolicy(physical:physical,physicalIPv4:identity.ipv4,dhcpServer:dhcpReader(physical))
+        expectedTUN=try tunReader();tunCaptured=true
+        let policy=try UDPOnlyPolicy(physical:physical,physicalIPv4:identity.ipv4,dhcpServer:dhcpReader(physical),dnsTUN:expectedTUN?.name)
         let env=try pf.environment();try states()
         let boot=bootReader();guard UUID(uuidString:boot) != nil else{throw fail("UDP protection: boot identity unavailable")}
         let canonical=try pf.prepareUDP(policy)
@@ -104,7 +121,7 @@ final class UDPProtection {
             journal!.stage="enabling";try persist()
             journal!.token=try pf.enable(cancelled:cancelled);journal!.stage="validating";try persist()
             try check()
-            // Negative probes only; no IP echo prerequisite and no Claude process access.
+            // Negative probes establish physical UDP blocking; a separate HTTPS check tests usability.
             for kind in [ProbeKind.boundUDP,.boundSTUN] {
                 guard !cancelled() else{throw fail("UDP protection: cancelled")}
                 let before=try PFText.counter(pf.labels(),label:policy.probeLabel(kind))
@@ -113,6 +130,12 @@ final class UDPProtection {
                 guard probe.kind==kind,probe.attempted,!probe.reply,!probe.setupError,after>before else{throw fail("UDP protection: negative probe/counter verification failed")}
                 try record("UDP-only probe \(kind.rawValue) counter=\(before)->\(after); TCP and egress not verified")
             }
+            try connectivityRunner(cancelled)
+            if policy.dnsTUN != nil {
+                let count=try PFText.counter(pf.labels(),label:policy.label+"_tun_dns")
+                try record("UDP-only TUN DNS allow counter=\(count); zero may indicate cached resolution")
+            }
+            try record("UDP-only DNS/HTTPS availability passed; TUN DNS exception=\(policy.dnsTUN ?? "none"); egress identity not asserted")
             try commands.assertQuiescent();try check()
             guard try physicalReader(physical)==identity,!cancelled() else{throw fail("UDP protection: final interface/operation changed")}
             initialCounts=try counters(policy)
@@ -129,6 +152,7 @@ final class UDPProtection {
     }
     func check() throws {
         guard let j=journal,let token=j.token else{throw fail("UDP protection: token unavailable")}
+        if tunCaptured {guard try tunReader()==expectedTUN else{verified=false;throw fail("UDP DNS: verified Core/TUN identity changed")}}
         let env=try pf.environment()
         guard env.2,env.0==j.main,try pf.canonical()==j.canonical,try pf.referencePresent(token),
               try pf.foreignReferences(token)==j.references else{verified=false;throw fail("UDP protection: PF rules/reference/environment changed")}

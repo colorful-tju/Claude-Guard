@@ -8,6 +8,8 @@ private final class UDPFixture:@unchecked Sendable {
     let root=NSTemporaryDirectory()+UUID().uuidString
     var rules="",enabled=false,token=false,states="",calls:[[String]]=[]
     var counters:[String:UInt64]=[:]
+    var tun:UDPDNSTUN?
+    var connectivityFails=false, connectivityCalls=0
     var failEnable=false,failBeforeEnable=false,failRemove=false,reply=false
     let boot=UUID().uuidString
     init() throws {try FileManager.default.createDirectory(atPath:root,withIntermediateDirectories:true)}
@@ -45,7 +47,7 @@ private final class UDPFixture:@unchecked Sendable {
     }
     func engine() throws -> UDPProtection {
         let commands=Commands()
-        return try UDPProtection(commands:commands,root:root,pf:PacketFilter(commands:commands,root:root,execute:run),owner:getuid(),physicalReader:{_ in .init(name:"en0",index:4,generation:1,ipv4:"192.0.2.2")},bootReader:{self.boot},dhcpReader:{_ in nil},probeRunner:{kind,_,_ in
+        return try UDPProtection(commands:commands,root:root,pf:PacketFilter(commands:commands,root:root,execute:run),owner:getuid(),physicalReader:{_ in .init(name:"en0",index:4,generation:1,ipv4:"192.0.2.2")},bootReader:{self.boot},tunReader:{self.tun},connectivityRunner:{_ in self.connectivityCalls+=1;if self.connectivityFails {throw fail("synthetic DNS failure")}},dhcpReader:{_ in nil},probeRunner:{kind,_,_ in
             let label=self.rules.components(separatedBy:"label \"").dropFirst().compactMap{$0.split(separator:"\"").first.map(String.init)}.first{$0.hasSuffix("_"+kind.rawValue)}!
             self.counters[label,default:0]+=1
             return .init(attempted:true,reply:self.reply,setupError:false,kind:kind)
@@ -53,6 +55,24 @@ private final class UDPFixture:@unchecked Sendable {
     }
 }
 @Suite struct UDPTransactionTests {
+    @Test func availabilityFailureRollsBackWithoutClaude() throws {
+        let f=try UDPFixture();f.connectivityFails=true
+        let e=try f.engine()
+        #expect(throws:(any Error).self){try e.start(physical:"en0",cancelled:{false},record:{_ in})}
+        #expect(f.connectivityCalls==1)
+        #expect(!e.active && !e.verified && !f.enabled && !f.token && f.rules.isEmpty)
+    }
+    @Test func tunIdentityChangeInvalidatesButOffStillWorks() throws {
+        let f=try UDPFixture()
+        f.tun = .init(name:"utun7",index:17,address:"198.18.0.1",core:.init(pid:123,startTime:99,executableIdentity:"synthetic"))
+        let e=try f.engine();try e.start(physical:"en0",cancelled:{false},record:{_ in})
+        #expect(f.rules.contains("on utun7 inet proto udp"))
+        f.tun = .init(name:"utun7",index:18,address:"198.18.0.1",core:.init(pid:123,startTime:100,executableIdentity:"synthetic"))
+        #expect(throws:(any Error).self){try e.check()}
+        #expect(!e.verified && !f.rules.isEmpty)
+        try e.stop();#expect(!e.active && f.rules.isEmpty && !f.token)
+    }
+
     @Test func startStopAndRestartRecoveryDoNotNeedClaude() throws {
         let f=try UDPFixture(),e=try f.engine()
         try e.start(physical:"en0",cancelled:{false},record:{_ in})

@@ -43,3 +43,21 @@ import Foundation
         #expect(!ProtectionMode.mayBegin(current:.claude))
     }
 }
+
+struct UDPTUNDNSTests {
+    @Test func onlyExactTUNIPv4DNSIsExempted() throws {
+        let p=try UDPOnlyPolicy(physical:"en0",dnsTUN:"utun7")
+        #expect(p.permitsUDP(interface:"utun7",family:.ipv4,source:"198.18.0.1",destination:"1.1.1.1",sourcePort:50000,destinationPort:53))
+        for name in ["en0","en9","utun8"] {
+            #expect(!p.permitsUDP(interface:name,family:.ipv4,source:"198.18.0.1",destination:"1.1.1.1",sourcePort:50000,destinationPort:53))
+        }
+        for port:UInt16 in [443,19302] {
+            #expect(!p.permitsUDP(interface:"utun7",family:.ipv4,source:"198.18.0.1",destination:"1.1.1.1",sourcePort:50000,destinationPort:port))
+        }
+        #expect(!p.permitsUDP(interface:"utun7",family:.ipv6,source:"::1",destination:"::2",sourcePort:50000,destinationPort:53))
+        #expect(p.rules.contains("pass out quick on utun7 inet proto udp from any to any port 53 no state"))
+        for name in ["en0","utun*","utun7\npass out all",""] {
+            #expect(throws:(any Error).self){try UDPOnlyPolicy(physical:"en0",dnsTUN:name)}
+        }
+    }
+}

@@ -96,7 +96,7 @@ public final class Inspector: @unchecked Sendable {
         guard after.started==core.started,after.path==core.path else{throw fail("Core changed during entry suggestions")}
         return Array(ips.sorted().prefix(32))
     }
-    private func verifyProcess(_ r:ProcessRecord,expectedHash:String) throws {
+    func verifyProcess(_ r:ProcessRecord,expectedHash:String) throws {
         var guest:SecCode?
         guard SecCodeCopyGuestWithAttributes(nil,[kSecGuestAttributePid as String:r.pid] as CFDictionary,[],&guest)==errSecSuccess,let guest,
               SecCodeCheckValidity(guest,SecCSFlags(rawValue:kSecCSStrictValidate),nil)==errSecSuccess else{throw fail("Running proxy Core signature invalid")}

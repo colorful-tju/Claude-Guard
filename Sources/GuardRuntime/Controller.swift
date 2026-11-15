@@ -42,7 +42,10 @@ public final class Controller: @unchecked Sendable {
         // UDP recovery never enumerates or terminates Claude. Do not enter legacy
         // orphan-anchor recovery until this independently owned transaction ends.
         if effects.pf is PacketFilter {
-            udpProtection=try UDPProtection(commands:commands,root:storage.root)
+            udpProtection=try UDPProtection(commands:commands,root:storage.root,tunReader:{[inspector] in
+                guard let live=inspector as? Inspector else{throw fail("UDP DNS: live inspector unavailable")}
+                return try live.udpDNSTUN()
+            })
             if udpProtection?.active == true {
                 guard !storage.exists("session.json") else{throw fail("Conflicting protection journals; manual recovery required")}
                 status.protectionMode = .udpOnly
@@ -753,7 +756,7 @@ public final class Controller: @unchecked Sendable {
                     try requireActive()
                     try udpProtection.start(physical:requested.physical,cancelled:{[self] in cancelled()},record:{[self] in try recordProbe($0)})
                     status.phase="armed";status.verified=true;status.udp="ON";status.blockedPackets=0
-                    status.monitor="全机 UDP 限制；不管理 Claude、不验证 TCP/出口"
+                    status.monitor="全机 UDP 限制；仅例外已核验 TUN 的 IPv4 DNS；不验证出口归属"
                     status.message="仅 UDP 防护已开启；IPv4 探针已验证，IPv6 规则覆盖但未实包验证"
                     activity.allowProtectedGrace()
                 } catch {

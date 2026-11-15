@@ -12,7 +12,8 @@ public struct UDPOnlyPolicy:Codable,Sendable,Equatable {
     public let sessionID:UUID
     public let physicalIPv4:String?
     public let dhcpServer:String?
-    public init(physical:String,physicalIPv4:String?=nil,dhcpServer:String?=nil,sessionID:UUID=UUID()) throws {
+    public let dnsTUN:String?
+    public init(physical:String,physicalIPv4:String?=nil,dhcpServer:String?=nil,dnsTUN:String?=nil,sessionID:UUID=UUID()) throws {
         guard physical.hasPrefix("en"),physical.count>2,physical.count<16,
               physical.dropFirst(2).utf8.allSatisfy({(48...57).contains($0)}) else {
             throw GuardFailure.unsupported("UDP protection requires a verified en interface")
@@ -21,6 +22,10 @@ public struct UDPOnlyPolicy:Codable,Sendable,Equatable {
         if let dhcpServer {
             guard let a=IPv4.octets(dhcpServer),a[0]==10 || (a[0]==172 && (16...31).contains(a[1])) || (a[0]==192 && a[1]==168),physicalIPv4 != nil else{throw GuardFailure.unsupported("UDP DHCP server must be a verified private IPv4")}
         }
+        if let dnsTUN {
+            guard dnsTUN.range(of:"^utun[0-9]{1,5}$",options:.regularExpression) != nil else{throw GuardFailure.unsupported("Invalid UDP DNS TUN")}
+        }
+        self.dnsTUN=dnsTUN
         self.physical=physical;self.sessionID=sessionID;self.physicalIPv4=physicalIPv4;self.dhcpServer=dhcpServer
     }
     public var label:String {"csg_udp_"+sessionID.uuidString.replacingOccurrences(of:"-",with:"").lowercased()}
@@ -41,11 +46,14 @@ public struct UDPOnlyPolicy:Codable,Sendable,Equatable {
             }
             rows.insert(contentsOf:renewals,at:2)
         }
+        if let dnsTUN {
+            rows.insert("pass out quick on \(dnsTUN) inet proto udp from any to any port 53 no state label \"\(label)_tun_dns\"",at:1)
+        }
         return rows.joined(separator:"\n")+"\n"
     }
     /// Offline model only, not a kernel-enforcement claim.
     public func permitsUDP(interface:String,family:AddressFamily,source:String,destination:String,sourcePort:UInt16,destinationPort:UInt16)->Bool {
-        interface=="lo0" || (interface==physical && family == .ipv4 && sourcePort==68 && destinationPort==67 &&
+        interface=="lo0" || (interface==dnsTUN && family == .ipv4 && destinationPort==53) || (interface==physical && family == .ipv4 && sourcePort==68 && destinationPort==67 &&
             ((source=="0.0.0.0" && destination=="255.255.255.255") ||
              (source==physicalIPv4 && (destination=="255.255.255.255" || destination==dhcpServer))))
     }
