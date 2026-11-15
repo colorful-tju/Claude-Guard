@@ -359,6 +359,16 @@ private struct LauncherView:View {
 
                     }
                     if !model.entryProbeMessage.isEmpty {Text(model.entryProbeMessage).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)}
+                    if model.entryProbeStale {Text("设置已变化；以上提示和以下记录保留自上次验证，请重新验证。").font(.caption).foregroundStyle(.orange)}
+                    if !model.entryProbeDiagnostics.isEmpty {
+                        DisclosureGroup("前置验证记录（可随反馈报告导出）") {
+                            VStack(alignment:.leading,spacing:3) {
+                                ForEach(Array(model.entryProbeDiagnostics.enumerated()),id:\.offset) { _, event in
+                                    Text("\(event.candidate) · \(event.stage) · \(event.outcome)").font(.caption.monospaced()).textSelection(.enabled)
+                                }
+                            }.frame(maxWidth:.infinity,alignment:.leading)
+                        }
+                    }
                     if let warning=model.state.entryCandidateWarning {Text(warning).font(.caption).foregroundStyle(.orange)}
                     if let candidates=model.state.entryCandidates,!candidates.isEmpty {
                         ScrollView(.horizontal) {HStack {ForEach(candidates,id:\.self) {ip in

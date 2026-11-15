@@ -8,6 +8,13 @@ public struct EntryProbeResult:Sendable {
     public let entry:String
     public let exit:String
 }
+public struct EntryProbeDiagnostic:Codable,Sendable {
+    public let candidate:String
+    public let stage:String
+    public let outcome:String
+    public let timestamp:String
+    public init(candidate:String,stage:String,outcome:String){self.candidate=candidate;self.stage=stage;self.outcome=outcome;self.timestamp=ISO8601DateFormatter().string(from:Date())}
+}
 public final class EntryProbeCancellation:@unchecked Sendable {
     private let lock=NSLock();private var value=false
     public init(){}
@@ -42,7 +49,7 @@ enum EntryProbeFrame {
 
 public enum EntryProbe {
     /// The fingerprint and signed Core identity must come from the authenticated daemon.
-    public static func run(status:Status,settings:Settings,resources:String,cancellation:EntryProbeCancellation) throws -> [EntryProbeResult] {
+    public static func run(status:Status,settings:Settings,resources:String,cancellation:EntryProbeCancellation,diagnostic:@escaping @Sendable (EntryProbeDiagnostic)->Void = {_ in}) throws -> [EntryProbeResult] {
         guard getuid() != 0,geteuid()==getuid(),status.phase=="off",
               let core=status.entryProbeCorePath,let identity=status.entryProbeCoreHash,
               let path=status.configurationPath,let name=settings.entryName,
@@ -59,6 +66,7 @@ public enum EntryProbe {
         guard !candidates.isEmpty,candidates.count<=8,candidates.allSatisfy(IPv4.isPublic) else{throw fail("未取得可测试的活动 Core 连接（最多 8 个）；请先固定前置并产生一次连接")}
         var results:[EntryProbeResult]=[]
         for ip in candidates {
+            diagnostic(.init(candidate:ip,stage:"参数提取",outcome:"开始"))
             if cancellation.cancelled {throw fail("前置验证已取消")}
             guard try UDPProtection.physical(settings.physical)==physical else{throw fail("前置测试期间物理接口改变")}
             let input=try JSONSerialization.data(withJSONObject:["yaml":yaml,"nodeName":name,"entryIPv4":ip,"physical":settings.physical])
@@ -70,7 +78,7 @@ public enum EntryProbe {
             }
             // Failures for individual candidates are expected (e.g. a DNS-over-HTTPS socket).
             // A result is a hint only until the daemon rechecks the live Core and startup gates.
-            if let result=try attempt(core:core,identity:identity,config:config,ip:ip,port:entry.port,physical:physical,cancellation:cancellation){results.append(result)}
+            if let result=try attempt(core:core,identity:identity,config:config,ip:ip,port:entry.port,physical:physical,cancellation:cancellation,diagnostic:diagnostic){results.append(result)}
         }
         guard !cancellation.cancelled,try UDPProtection.physical(settings.physical)==physical,
               try ProxyConfiguration.bytes(path:path,uid:getuid())==raw,try codeHash(path:core)==identity else{throw fail("前置测试结果已失效：配置、接口或 Core 改变")}
@@ -91,7 +99,11 @@ public enum EntryProbe {
         guard IPv4.isPublic(ip) else{throw fail("前置回显不是有效公网 IPv4")}
         return ip
     }
-    private static func attempt(core:String,identity:String,config:[String:Any],ip:String,port:UInt16,physical:InterfaceIdentity,cancellation:EntryProbeCancellation) throws -> EntryProbeResult? {
+    private static func attempt(core:String,identity:String,config:[String:Any],ip:String,port:UInt16,physical:InterfaceIdentity,cancellation:EntryProbeCancellation,diagnostic:@escaping @Sendable (EntryProbeDiagnostic)->Void) throws -> EntryProbeResult? {
+        var stage="隔离 Core 启动",outcome="失败"
+        func mark(_ value:String){stage=value;diagnostic(.init(candidate:ip,stage:stage,outcome:"开始"))}
+        defer{diagnostic(.init(candidate:ip,stage:stage,outcome:cancellation.cancelled ? "已取消":outcome))}
+        mark(stage)
         // mkdtemp supplies atomic private ownership. Do not copy the source's setuid mode/xattrs.
         var template=Array("/private/tmp/cg-entry-XXXXXX".utf8CString)
         guard let created=mkdtemp(&template) else{throw fail("前置测试临时目录创建失败")}
@@ -134,8 +146,10 @@ public enum EntryProbe {
             throw fail("独立前置测试超时")
         }
         do {
+            mark("等待独立 IPC 连接")
             try wait(listener,event:Int16(POLLIN),end:ProcessInfo.processInfo.systemUptime+5)
             connection=accept(listener,nil,nil);guard connection>=0 else{throw fail("独立 Core IPC 接受失败")}
+            mark("IPC 与子进程身份核验")
             var token=[UInt8](repeating:0,count:32),uid:UInt32=0,pid:Int32=0
             guard csg_peer(connection,&token,&uid,&pid)==0,uid==getuid(),pid==child.processIdentifier,
                   try guestHash(token:Data(token))==identity else{throw fail("独立 Core IPC 身份不符")}
@@ -188,20 +202,37 @@ public enum EntryProbe {
                 }
                 throw fail("独立 Core IPC 无匹配应答")
             }
+            mark("Core 初始化")
             _=try rpc("core.init",["home-dir":dir,"version":0],seconds:5)
+            mark("隔离配置传输与加载")
             sendConfig=true
             _=try rpc("config.setup",["selected-map":[:],"options":["skip-cert-verify":false]],seconds:5)
             guard configPipe.completed else{throw fail("独立 Core 未读取完整配置")}
             sendConfig=false
+            mark("代理协议与 HTTPS 回显")
             let reply=try rpc("probe.outboundIp",["proxy-name":"GuardEntry","urls":["https://api.ipify.org/","https://ipv4.webshare.io/"],"timeout":8000],seconds:10,watch:true)
             guard let result=reply["result"] as? [String:Any] else{return nil}
+            if let code=result["error"] as? String {
+                outcome=["timeout","failed","cancelled","proxy_not_found"].contains(code) ? code:"Core 返回失败"
+                return nil
+            }
+            mark("回显响应核验")
             let exit=try echo(result)
             observe()
-            guard observed,!unexpected,!unreadable,IPv4.isPublic(exit) else{return nil}
+            mark("物理连接证据核验")
+            guard observed,!unexpected,!unreadable,IPv4.isPublic(exit) else{
+                outcome=unreadable ? "子进程连接信息无法读取":unexpected ? "发现非预期连接":"未观察到指定物理源地址的已建立连接"
+                return nil
+            }
+            outcome="通过"
             return .init(entry:ip,exit:exit)
         } catch {
             if cancellation.cancelled {throw fail("前置验证已取消")}
-            return nil // Never emit Core responses/configuration/credentials into diagnostics.
+            if case GuardFailure.rejected(let message)=error {
+                let allowed=["独立前置测试超时","独立前置测试已取消或 Core 退出","独立 Core IPC 身份不符","独立 Core 未以普通用户运行","Entry probe IPC reply rejected","独立 Core IPC 接收失败","前置回显不属于指定代理测试","前置回显不是有效公网 IPv4"]
+                if allowed.contains(message){outcome=message}
+            }
+            return nil // Never emit arbitrary Core responses/configuration/credentials.
         }
     }
 }

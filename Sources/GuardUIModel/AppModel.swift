@@ -6,6 +6,9 @@ import GuardCore
 
 @MainActor public final class AppModel:ObservableObject {
     @Published public var entryProbeMessage=""
+    @Published public var entryProbeDiagnostics:[EntryProbeDiagnostic]=[]
+    @Published public var entryProbeStale=false
+    public private(set) var entryProbeContext:Settings?
     @Published public var testingEntry=false
     private var entryCancellation:EntryProbeCancellation?
     @Published public var ipCheck:IPCheck?
@@ -50,9 +53,11 @@ import GuardCore
         return Guidance.current(state,failure:failure,busy:busy,confirmation:confirmation,ip:ipCheck,stale:ipStale || ipCheck?.expected != settings.expectedEgress)
     }
     @Published public var settings=Settings() {didSet {
-        confirmation=false;ipStale=true;settingsRevision += 1
-        entryCancellation?.cancel();entryProbeMessage=""
-        saveSettings()
+        if settings != oldValue {
+            confirmation=false;ipStale=true;settingsRevision += 1
+            entryCancellation?.cancel();if !entryProbeMessage.isEmpty {entryProbeStale=true}
+            saveSettings()
+        }
     }}
     @Published public var onboardingComplete=false
     @Published public var ipv6Preview:IPv6Preview?
@@ -252,15 +257,22 @@ import GuardCore
         guard !busy,!testingIP,state.phase=="off",settings.effectivePathMode == .chain,
               let resources=Bundle.main.resourcePath else{return}
         busy=true;testingEntry=true;confirmation=false;failure=""
+        entryProbeDiagnostics=[];entryProbeStale=false;entryProbeContext=settings
         entryProbeMessage="正在验证所选节点的协议、物理源地址和活动连接；不会切换代理。"
         let cancellation=EntryProbeCancellation();entryCancellation=cancellation
         revision+=1;let probeRevision=revision
         let saved=settings,configVersion=settingsRevision,call=transport
         Task.detached { [weak self] in
+            let receiver=self
             do {
                 let before=try call(Request(.inspect,settings:saved))
                 guard before.ok,before.status.phase=="off" else{throw fail("请先关闭防护并重新检测配置")}
-                let results=try EntryProbe.run(status:before.status,settings:saved,resources:resources,cancellation:cancellation)
+                let results=try EntryProbe.run(status:before.status,settings:saved,resources:resources,cancellation:cancellation,diagnostic:{ event in
+                    Task { @MainActor [weak receiver] in
+                        guard let self=receiver,self.revision==probeRevision else{return}
+                        self.entryProbeDiagnostics.append(event)
+                    }
+                })
                 let after=try call(Request(.inspect,settings:saved))
                 guard !cancellation.cancelled,after.ok,after.status.phase=="off",
                       after.status.fingerprint==before.status.fingerprint,
@@ -278,6 +290,7 @@ import GuardCore
                     self.state=after.status
                     if results.count==1,let result=results.first {
                         self.settings.entryIPv4=result.entry
+                        self.entryProbeStale=false
                         self.entryProbeMessage="已匹配连接入口：\(result.entry)；本次前置回显出口：\(result.exit)。入口已填入，仍需确认端点并启动完整防护验证。"
                     } else if results.isEmpty {
                         self.entryProbeMessage="没有候选通过独立协议与连接核验。可能是节点不支持独立连接、证书校验失败或网络超时；不会猜选入口。"
@@ -359,7 +372,7 @@ import GuardCore
     public func export() {
         let panel=NSSavePanel();panel.nameFieldStringValue="ClaudeGuard反馈.json";panel.allowedContentTypes=[.json]
         if panel.runModal() == .OK,let url=panel.url {
-            do{let enc=JSONEncoder();enc.outputFormatting=[.prettyPrinted,.sortedKeys];var data=try JSONSerialization.jsonObject(with:enc.encode(state)) as! [String:Any];data["uiHeartbeat"]=try JSONSerialization.jsonObject(with:enc.encode(heartbeat.snapshot()));data["communicationWarning"]=communicationWarning;data["operationError"]=failure;if let ipCheck {data["ipTest"]=try JSONSerialization.jsonObject(with:enc.encode(ipCheck));data["ipTestStale"]=ipStale};try JSONSerialization.data(withJSONObject:data,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic)}catch{failure="报告保存失败"}
+            do{let enc=JSONEncoder();enc.outputFormatting=[.prettyPrinted,.sortedKeys];var data=try JSONSerialization.jsonObject(with:enc.encode(state)) as! [String:Any];data["uiHeartbeat"]=try JSONSerialization.jsonObject(with:enc.encode(heartbeat.snapshot()));data["communicationWarning"]=communicationWarning;data["operationError"]=failure;data["entryProbeMessage"]=entryProbeMessage;data["entryProbeStale"]=entryProbeStale;data["entryProbeDiagnostics"]=try JSONSerialization.jsonObject(with:enc.encode(entryProbeDiagnostics));if let entryProbeContext {data["entryProbeContext"]=try JSONSerialization.jsonObject(with:enc.encode(entryProbeContext))};if let ipCheck {data["ipTest"]=try JSONSerialization.jsonObject(with:enc.encode(ipCheck));data["ipTestStale"]=ipStale};try JSONSerialization.data(withJSONObject:data,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic)}catch{failure="报告保存失败"}
         }
     }
 }

@@ -211,3 +211,22 @@ struct ProxyRegistrationUITests {
         #expect(model.request(.registerProxyConfiguration,configurationPath:"/x")==nil)
     }
 }
+
+struct EntryProbePresentationTests {
+    @Test @MainActor func settingsEditsKeepResultAndDiagnosticEvidence() {
+        let model=AppModel(autoPoll:false,preferences:nil)
+        model.entryProbeMessage="没有候选通过"
+        model.entryProbeDiagnostics=[.init(candidate:"1.2.3.4",stage:"代理协议与 HTTPS 回显",outcome:"timeout")]
+        let saved=model.settings
+        model.settings=saved // SwiftUI can submit an unchanged field value.
+        #expect(!model.entryProbeStale)
+        #expect(model.entryProbeMessage=="没有候选通过")
+        #expect(model.entryProbeDiagnostics.count==1)
+        model.settings.expectedEgress="8.8.4.4"
+        #expect(model.entryProbeMessage=="没有候选通过")
+        #expect(model.entryProbeStale)
+        let data=try? JSONEncoder().encode(model.entryProbeDiagnostics)
+        #expect(data != nil)
+        #expect(!model.confirmation)
+    }
+}

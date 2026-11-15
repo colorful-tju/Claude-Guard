@@ -2,7 +2,7 @@ import Foundation
 import GuardCore
 import Darwin
 import NativeGuard
-public struct Settings: Codable, Sendable {
+public struct Settings: Codable, Sendable, Equatable {
     public var pathMode:ProxyPathMode?
     public var entryName:String?
     public var entryIPv4:String?
