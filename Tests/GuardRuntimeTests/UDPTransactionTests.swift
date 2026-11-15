@@ -16,7 +16,7 @@ private final class UDPFixture:@unchecked Sendable {
         calls.append(args)
         var out=""
         if args.contains("-f") {
-            let text=try String(contentsOfFile:args.last!,encoding:.utf8)
+            let text=try String(contentsOfFile:args.last!,encoding:.utf8).replacingOccurrences(of:" port ([0-9]+)",with:" port = $1",options:.regularExpression)
             if args.contains("-n"){out=text}else{rules=text}
         } else {switch args {
         case ["-s","Anchors"]:out="com.apple\n"

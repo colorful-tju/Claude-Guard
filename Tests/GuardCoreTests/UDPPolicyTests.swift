@@ -22,6 +22,19 @@ import Foundation
         #expect(!p.permitsUDP(interface:"en0",family:.ipv4,source:"0.0.0.0",destination:"1.1.1.1",sourcePort:68,destinationPort:67))
         #expect(throws:(any Error).self){try UDPOnlyPolicy(physical:"en0\npass out all")}
     }
+    @Test func renewalsAuthorizeOnlyExactDHCPDestinationsAndPorts() throws {
+        let p=try UDPOnlyPolicy(physical:"en0",physicalIPv4:"192.168.1.2",dhcpServer:"192.168.1.1")
+        for target in ["255.255.255.255","192.168.1.1"] {
+            #expect(p.permitsUDP(interface:"en0",family:.ipv4,source:"192.168.1.2",destination:target,sourcePort:68,destinationPort:67))
+            #expect(!p.permitsUDP(interface:"en0",family:.ipv4,source:"192.168.1.2",destination:target,sourcePort:50000,destinationPort:67))
+            #expect(!p.permitsUDP(interface:"en0",family:.ipv4,source:"192.168.1.2",destination:target,sourcePort:68,destinationPort:443))
+            #expect(!p.permitsUDP(interface:"en9",family:.ipv4,source:"192.168.1.2",destination:target,sourcePort:68,destinationPort:67))
+        }
+        #expect(!p.permitsUDP(interface:"en0",family:.ipv4,source:"192.168.1.2",destination:"1.1.1.1",sourcePort:68,destinationPort:67))
+        #expect(throws:(any Error).self){try UDPOnlyPolicy(physical:"en0",physicalIPv4:"192.168.1.2",dhcpServer:"1.1.1.1")}
+        #expect(p.rules.split(separator:"\n").count==7)
+        #expect(!p.rules.contains("{"))
+    }
     @Test func lifecycleIsModeSpecificAndMutuallyExclusive() throws {
         #expect(!ProtectionMode.udpOnly.managesClaude)
         #expect(ProtectionMode.claude.managesClaude)

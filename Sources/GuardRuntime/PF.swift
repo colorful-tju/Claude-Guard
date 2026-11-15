@@ -111,9 +111,15 @@ public final class PacketFilter: PacketFiltering, @unchecked Sendable {
         try h.write(contentsOf:Data(policy.rules.utf8));guard fsync(fd)==0 else{throw fail("UDP rule file fsync failed")};try h.close()
         let dry=try pf(["-n","-v","-o","none","-a",GuardPolicy.anchor,"-f",file])
         let lines=dry.components(separatedBy:.newlines).filter{$0.hasPrefix("pass ") || $0.hasPrefix("block ")}
-        guard lines.count==policy.rules.split(separator:"\n").count,
-              lines.filter({$0.hasPrefix("pass ")}).allSatisfy({$0.contains("no state")}),
-              lines.last==policy.rules.split(separator:"\n").last.map(String.init) else{throw fail("UDP dry parse changed protection rules")}
+        // The only presentation normalization in our explicit UDP grammar is
+        // pfctl's numeric equality operator: "port 68" becomes "port = 68".
+        // Compare every field and its ordering; do not merely count/inspect the last rule.
+        let required=policy.rules.replacingOccurrences(of:" port ([0-9]+)",with:" port = $1",options:.regularExpression)
+            .split(separator:"\n").map(String.init)
+        guard lines==required else {
+            let mismatch=zip(lines,required).enumerated().first(where:{$0.element.0 != $0.element.1}).map{$0.offset+1}
+            throw fail("UDP dry parse changed protection rules; UDP 规则预检查不一致，尚未加载防护；expected=\(required.count) actual=\(lines.count) firstMismatch=\(mismatch.map(String.init) ?? "count")")
+        }
         return lines.joined(separator:"\n")+"\n"
     }
     func activateUDP(_ policy:UDPOnlyPolicy,expected:String) throws {

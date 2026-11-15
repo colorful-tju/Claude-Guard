@@ -33,8 +33,13 @@ public struct UDPOnlyPolicy:Codable,Sendable,Equatable {
          "block drop out quick on \(physical) inet proto udp from any port 61003 to 74.125.250.129 port 19302 label \"\(probeLabel(.boundSTUN))\"",
          "block drop out quick proto udp all label \"\(label)_deny\""]
         if let physicalIPv4 {
-            let destinations=dhcpServer.map{"{ 255.255.255.255, \($0) }"} ?? "255.255.255.255"
-            rows.insert("pass out quick on \(physical) inet proto udp from \(physicalIPv4) port 68 to \(destinations) port 67 no state label \"\(label)_renew\"",at:2)
+            // pfctl expands address lists into separate rules. Emit each exact
+            // destination ourselves so dry parsing cannot change the rule count.
+            let destinations=["255.255.255.255"]+(dhcpServer.map{[$0]} ?? [])
+            let renewals=destinations.map { destination in
+                "pass out quick on \(physical) inet proto udp from \(physicalIPv4) port 68 to \(destination) port 67 no state label \"\(label)_renew\""
+            }
+            rows.insert(contentsOf:renewals,at:2)
         }
         return rows.joined(separator:"\n")+"\n"
     }
