@@ -129,10 +129,10 @@ raise SystemExit('unexpected fixture command '+tool)
                 path.write_text('new-'+path.name)
                 path.chmod(0o755)
             shutil.copy2(tools/'helper',staged/'Contents/Resources/guard-daemon')
-            for version in ['0.2.7','0.2.8','0.2.9','0.3.0','0.3.1','0.3.2','0.4.0','0.4.1','0.4.2','0.4.3','0.4.4','0.4.5','0.4.6','0.5.4','0.5.5','0.5.6','0.5.7','0.5.8','0.5.9','0.5.10','0.5.11','0.5.12','0.5.13','0.5.14','0.5.15','0.5.16','0.5.17','0.5.18','0.5.19','0.5.20','0.5.21','0.5.22','0.5.23','0.5.24','0.5.25','0.5.26','0.5.27','0.5.28','0.5.29']:
-                with zipfile.ZipFile(project/f'dist/ClaudeSafeLauncher-{version}-test.zip','w') as archive:
-                    for path in staged.rglob('*'):
-                        archive.write(path,path.relative_to(staged.parent))
+            # Match real DMG: exactly one payload, no old versions to mask stale references.
+            with zipfile.ZipFile(project/'dist/ClaudeSafeLauncher-test.zip','w') as archive:
+                for path in staged.rglob('*'):
+                    archive.write(path,path.relative_to(staged.parent))
             source=(SCRIPTS/script).read_text()
             source=source.replace('if [[ "$EUID" -ne 0 ]]; then','if false; then')
             source=source.replace('/Library/',str(base)+'/Library/').replace('/Applications/',str(base)+'/Applications/')

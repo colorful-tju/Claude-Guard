@@ -1,6 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Stable internal payload name; release versions belong to the outer DMG only.
+archive="$PWD/dist/ClaudeSafeLauncher-test.zip"
+check_resources() {
+  [[ ! -L "$PWD/dist" && -f "$archive" && ! -L "$archive" ]] || { echo '安装资源缺失，请重新获取完整磁盘映像。'; return 2; }
+}
+# Read-only packaging acceptance: no sudo, install lock, launchd or system changes.
+if [[ "${1:-}" == --check-resources ]]; then
+  [[ "$#" -eq 1 ]] || exit 2
+  check_resources
+  echo '安装资源路径检查通过；未安装或修改系统。'
+  exit 0
+fi
+check_resources
 if [[ "$EUID" -ne 0 ]]; then exec sudo /bin/bash "$PWD/scripts/install.sh" "$@"; fi
 if [[ -f "$PWD/architecture" ]]; then
   expected_arch="$(cat "$PWD/architecture")"
@@ -16,8 +29,6 @@ helper="/Library/PrivilegedHelperTools/$label"
 plist="/Library/LaunchDaemons/$label.plist"
 [[ ! -L "$root" && ! -L "$app" && ( ! -e "$root" || -d "$root" ) ]] || { echo '拒绝不可信安装目标'; exit 2; }
 [[ ! -e "$root/ipv6-override.json" && ! -L "$root/ipv6-override.json" && ! -e "$root/session.json" && ! -L "$root/session.json" && ! -e "$root/udp-session.json" && ! -L "$root/udp-session.json" ]] || { echo '存在安全事务，请先关闭安全模式或完成紧急恢复，不能更新。'; exit 2; }
-archive="$PWD/dist/ClaudeSafeLauncher-0.5.29-test.zip"
-[[ -f "$archive" && ! -L "$archive" ]] || { echo '安装资源缺失，请重新获取完整磁盘映像。'; exit 2; }
 # Separate from daemon.lock: serialize delivery changes without bypassing the
 # helper's authoritative OFF assertion under the daemon transaction lock.
 install_lock="$root.install-lock"

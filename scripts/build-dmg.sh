@@ -2,7 +2,7 @@
 # Packaging only. Does not install, launch helper, change PF or execute applets.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-version=0.5.30
+version=0.5.31
 arch="${1:-arm64}"
 case "$arch" in arm64) platform=AppleSilicon;; x86_64) platform=Intel;; *) exit 2;; esac
 archive="$PWD/dist/$arch/ClaudeSafeLauncher-$version-test.zip"
@@ -23,7 +23,8 @@ for mode in Installer; do
   if [[ "$mode" == Installer ]]; then
     echo "$arch" > "$resources/payload/architecture"
     cp -X scripts/install.sh "$resources/payload/scripts/"
-    cp -X "$archive" "$resources/payload/dist/"
+    cp -X "$archive" "$resources/payload/dist/ClaudeSafeLauncher-test.zip"
+    /bin/bash "$resources/payload/scripts/install.sh" --check-resources
   else
     cp -X scripts/uninstall.sh "$resources/payload/scripts/"
   fi
