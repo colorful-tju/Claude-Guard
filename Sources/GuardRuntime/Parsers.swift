@@ -134,6 +134,7 @@ public enum PFText {
 }
 public struct PFReference:Sendable,Codable {public var pid:Int32;public var name:String;public var token:String}
 public struct NodeConfiguration: Codable, Sendable {
+    public var chain:ChainConfiguration? = nil
     public var name: String; public var type: String; public var server: String; public var port: UInt16
     public var fingerprint: String; public var numeric: Bool; public var tunDevice: String
     public static func parse(_ data: Data) throws -> NodeConfiguration {

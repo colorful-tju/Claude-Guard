@@ -122,18 +122,23 @@ public final class Controller: @unchecked Sendable {
         catch {logHealthy=false;status.lastRisk="事件日志写入失败；诊断记录不完整";status.verified=false}
     }
     private func persist() throws {if let journal{try storage.writeJournal(journal)}}
-    public func inspect() throws {
+    public func inspect(_ previewSettings:Settings?=nil) throws {
         try requireRegistrationConsistent()
         guard journal == nil,udpProtection?.active != true else{return} // Active UI requests only read the last monitor result.
-        let n=try inspector.node();status.configurationError=nil;status.gateway="\(n.server):\(n.port)";status.fingerprint=n.fingerprint
+        let n=try inspector.node();status.configurationError=nil;status.gateway="\(n.server):\(n.port)";status.fingerprint=n.fingerprint;status.chainCandidate=n.chain
         let inventory=effects.inventory()
         try status.applyPreview(inventory,uid:installation.uid,allowPartial:journal == nil || status.phase=="recoveryBlocked",known:previousHealthy?.claudeProcesses ?? [],corePath:installation.registeredCorePath)
+        status.entryCandidates=[];status.entryCandidateWarning=nil
+        if let previewSettings,previewSettings.effectivePathMode == .chain {
+            do {status.entryCandidates=try inspector.physicalEntryCandidates(settings:previewSettings)}
+            catch {status.entryCandidateWarning="无法读取前置连接候选；请确认已登记 Core、前置选择和当前连接。"}
+        }
         status.message="配置候选已读取；运行态和出口仍需验证"
     }
     private func snapshot(_ evidence:RuntimeEvidence,policy:GuardPolicy) throws -> LocalSnapshot {
         let view=try pf.view(policy);latestLabels=view.labels;var s=LocalSnapshot(policy:policy,core:evidence.core,connection:evidence.connection)
         s.epoch=evidence.epoch;s.interfaces=evidence.network.interfaces;s.routeFingerprint=evidence.routeFingerprint
-        s.configurationFingerprint=evidence.node.fingerprint;s.nodeName=evidence.node.name;s.gateway=evidence.node.server;s.gatewayPort=evidence.node.port;s.protocolName=evidence.node.type
+        s.configurationFingerprint=evidence.node.fingerprint;s.nodeName=evidence.node.name;s.gateway=evidence.connection.gateway;s.gatewayPort=evidence.connection.port;s.protocolName=evidence.chainBoundary?.entryProtocol ?? evidence.node.type;s.chain=evidence.chainBoundary
         s.flclashRunning=true;s.coreIdentityVerified=true;s.verifiedTun=evidence.network.tun;s.tunRuntimeVerified=true
         s.pfEnabled=view.enabled;s.mainRulesFingerprint=hash(Data(view.main.utf8));s.pfEnvironmentCompatible=true
         s.processInventoryComplete=evidence.inventory.complete;s.claudeProcesses=evidence.claude;s.stateInventoryComplete=true;s.states=view.states;s.ipv6Routable=evidence.network.ipv6Routable
@@ -162,12 +167,13 @@ public final class Controller: @unchecked Sendable {
             let e=try inspector.runtime(settings:settings)
             try requireActive()
             guard e.claude.isEmpty else{throw fail("请先退出 Claude 和 Helpers；预检不会强制关闭未受保护的会话")}
-            let endpoint=try Endpoint(gateway:e.node.server,port:e.node.port,expectedEgress:settings.expectedEgress,configurationFingerprint:e.node.fingerprint,providerConfirmed:settings.providerConfirmed,confirmedGateway:settings.gateway,confirmedPort:settings.port,confirmedFingerprint:settings.confirmationFingerprint,protocolName:e.node.type)
+            let path=try ProxyPath.resolve(node:e.node,settings:settings)
+            let endpoint=try Endpoint(gateway:path.gateway,port:path.port,expectedEgress:settings.expectedEgress,configurationFingerprint:e.node.fingerprint,providerConfirmed:settings.providerConfirmed,confirmedGateway:path.gateway,confirmedPort:path.port,confirmedFingerprint:settings.confirmationFingerprint,protocolName:path.protocolName,chain:path.chain)
             let policy=try GuardPolicy(endpoint:endpoint,physical:e.network.physical,tun:e.network.tun)
             let pre=try snapshot(e,policy:policy)
             guard try pf.canonical().trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{throw fail("Own anchor is not empty without journal; ownership uncertain")}
             var engine=SafetySession(policy:policy);_=try engine.begin();_=try engine.preflightAccepted(pre);session=engine
-            log("preflight accepted session=\(policy.sessionID) gateway=\(e.node.server):\(e.node.port) core=\(e.core.pid) epoch=\(e.epoch)")
+            log("preflight accepted session=\(policy.sessionID) gateway=\(path.gateway):\(path.port) mode=\(settings.effectivePathMode.rawValue) core=\(e.core.pid) epoch=\(e.epoch)")
             try requireActive()
             let env=try pf.environment();try requireEpoch(pre.epoch);try requireActive()
             let boot=effects.boot();guard UUID(uuidString:boot) != nil else{throw fail("Kernel boot UUID unavailable")}
@@ -232,7 +238,7 @@ public final class Controller: @unchecked Sendable {
             previousHealthyAt=ISO8601DateFormatter().string(from:Date())
             status.processInventoryComplete=final.processInventoryComplete;status.claudeKnown=true;status.claude = !final.claudeProcesses.isEmpty
             journal!.stage="armed";try persist();status.phase="armed";status.verified=true;status.udp="ON（实包及计数已验证）";status.monitor="PF 防护运行；socket 仅诊断，不凭创建连接判泄漏";lastSocketObservation=nil
-            status.gateway="\(policy.endpoint.gateway):\(policy.endpoint.port)";status.egress=policy.endpoint.expectedEgress;status.physical=policy.physical.name;status.tun=policy.tun.name
+            status.gateway="\(e.node.server):\(e.node.port)";status.physicalGateway="\(policy.endpoint.gateway):\(policy.endpoint.port)";status.proxyPathMode=settings.effectivePathMode;status.egress=policy.endpoint.expectedEgress;status.physical=policy.physical.name;status.tun=policy.tun.name
             status.ipv6="无默认路由；未完成 IPv6 实包验证";status.country="地区未核验；仅验证预期 IPv4";status.flclash=true
             log("ARMED session=\(policy.sessionID) gateway=\(status.gateway) egress=\(status.egress) interfaces=\(status.physical),\(status.tun)")
             try requireActive()
@@ -681,7 +687,7 @@ public final class Controller: @unchecked Sendable {
         try persistRegistration(updated)
         installation=updated;inspector.adoptConfiguration(path:path)
         settings=nil;status.configurationPath=path;status.configurationError=nil
-        status.gateway="\(final.server):\(final.port)";status.fingerprint=final.fingerprint
+        status.gateway="\(final.server):\(final.port)";status.fingerprint=final.fingerprint;status.chainCandidate=final.chain
         status.verified=false;status.egress="";status.lastRisk=""
         status.message="配置已登记；请核对端点并重新验证。尚未确认 Core 正在使用该节点。"
         log("proxy configuration registered; candidate only; runtime/PF/egress still required")
@@ -727,7 +733,7 @@ public final class Controller: @unchecked Sendable {
                 catch {throw fail("Claude registration: " + String(describing:error))}
             case .heartbeat:heartbeat()
             case .progress:return .init(ok:true,status:progressStatus())
-            case .inspect:try inspect()
+            case .inspect:try inspect(request.settings)
             case .selfTest:
                 guard journal==nil,status.phase=="off" else{throw fail("Offline self-test requires OFF")}
                 try activity.begin();defer{activity.finish()}

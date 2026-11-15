@@ -3,6 +3,10 @@ import GuardCore
 import Darwin
 import NativeGuard
 public struct Settings: Codable, Sendable {
+    public var pathMode:ProxyPathMode?
+    public var entryName:String?
+    public var entryIPv4:String?
+    public var effectivePathMode:ProxyPathMode {pathMode ?? .direct}
     public var gateway:String=""; public var port:UInt16=0; public var expectedEgress:String=""
     public var physical:String="en0"; public var providerConfirmed:Bool=false
     public var confirmationFingerprint:String=""
@@ -37,6 +41,11 @@ public struct HeartbeatDiagnostic:Codable,Sendable {
     public var delayed:Bool {(ageSeconds ?? 0)>=6}
 }
 public struct Status:Codable,Sendable {
+    public var entryCandidates:[String]?
+    public var entryCandidateWarning:String?
+    public var chainCandidate:ChainConfiguration?
+    public var physicalGateway:String?
+    public var proxyPathMode:ProxyPathMode?
     public var protectionMode:ProtectionMode?
     public var periodicEgress:EgressDiagnostic?
     public var egressRechecking:Bool?

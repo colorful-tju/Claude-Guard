@@ -4,7 +4,7 @@
 
 面向 macOS 的小型桌面工具，为通过 HTTP 代理使用 Claude Desktop 与本机 Claude Code 的用户提供临时出口限制、启动前验收与运行中监控。使用结束后，按顺序退出受保护进程并恢复本工具修改的网络状态。
 
-> **0.5.27 测试候选 · macOS 14+ · 源码可见 / 非商业 / 禁止二次开发**
+> **0.5.27 测试版 · macOS 14+ · 源码可见 / 非商业 / 禁止二次开发**
 > 个人测试版安装修复，尚未完成 Apple 公证，不是 Anthropic 官方软件。作者：[colorful / @colorful-tju](https://github.com/colorful-tju)。许可见 [LICENSE](LICENSE)。
 
 ## 为什么需要它
@@ -34,20 +34,23 @@ Claude Guard 面向这样的使用场景：你已经准备好一个 **数字 IPv
 
 本版取消了对代理 GUI 品牌和节点名称的固定要求，但仍需安装时登记**实际持有 TUN 与网关 TCP socket 的核心可执行文件**；配置路径在 App 网络设置中明确选择并登记。
 
-目前配置读取器支持：
+完整防护支持两种路径：
 
-- 单节点的 Mihomo / Clash YAML，节点类型 `http`；节点名任意但不得为空。
-- 服务商明确支持的数字公网 IPv4 endpoint 与端口。
-- 不启用 TLS-to-proxy、UDP、dialer-proxy 或额外传输；HTTPS 网站通过 HTTP CONNECT 访问。
-- 核心可通过 macOS 原生 socket 信息证明其持有唯一 TUN，并有到指定网关的已建立 TCP 连接。
+- **直连 ISP**：单个数字公网 IPv4 的 HTTP 节点；不启用 TLS-to-proxy 或 UDP，HTTPS 通过 CONNECT 访问。
+- **链式代理**：数字 IPv4 的 HTTP ISP 落地，通过 `dialer-proxy` 连接配置内的固定 TCP 前置。支持 vless、vmess、trojan、ss（无插件）、HTTP、SOCKS5 前置；前置组须为手动 `select`，不支持 UDP 外层、自动选路及继续嵌套多跳。ISP 落地仍只支持 HTTP。
+- 两种路径都要求已登记核心的签名、TUN 归属、启动时真实物理 TCP 连接、预期公网出口及 PF 负向探针通过。出口一致不等于防护通过。
 
-域名 endpoint、多节点/外部 provider、SOCKS5、UDP 隧道、任意 VPN 或无法证明核心归属的实现均不属于本版支持范围。更换核心版本后需重新登记签名。**未对其他客户端完成实机兼容性认证**，不能把同样的出口 IP 当成兼容证明。FLClash 的既有路径可作为安装快捷方式保留，但运行时不要求其 GUI 存在。
+链式模式只放行一个确认的前置 IPv4/端口。域名前置保持原配置不变，用户根据 Core 实际连接核对并固定当前 IPv4；不自动解析、改写域名或扩展 PF 放行列表。多个同端口候选不能确定时不要猜选。前置只存在于外部 provider 中、未进入配置 `proxies` 的情况暂不支持；请使用可读取具体节点的专用配置。
+
+“仅 UDP 防护”不要求上述代理路径核验，也不验证 TCP 出口；它是独立的全机 UDP 限制，和完整防护互斥。IPv6 UDP 包受规则限制，但 IPv6 TCP 不在此模式范围。
+
+更换核心版本后需重新登记签名。**新模式尚需实机网络验收，Intel 为交叉构建；未对其他客户端完成实机兼容性认证。** 不启用代理控制 API，不切换订阅或节点。
 
 ## 首次使用
 
 ### 1. 打开 DMG
 
-从 [Releases](https://github.com/colorful-tju/Claude-Guard/releases/tag/v0.5.23) 获取对应架构的 DMG：`Claude-Guard-0.5.23-macOS-AppleSilicon-arm64.dmg` 或 `Claude-Guard-0.5.23-macOS-Intel-x86_64.dmg`。分别提供 Apple Silicon 与 Intel 测试包，适用于 Mac、macOS 14 或以上；不需要 Xcode、源码或终端构建命令。macOS 26 使用系统 Liquid Glass，旧系统使用材质回退。
+从 [Releases](https://github.com/colorful-tju/Claude-Guard/releases/tag/v0.5.27) 获取对应架构的 DMG：`Claude-Guard-0.5.27-macOS-AppleSilicon-arm64.dmg` 或 `Claude-Guard-0.5.27-macOS-Intel-x86_64.dmg`。分别提供 Apple Silicon 与 Intel 测试包，适用于 Mac、macOS 14 或以上；不需要 Xcode、源码或终端构建命令。macOS 26 使用系统 Liquid Glass，旧系统使用材质回退。
 
 打开映像，按顶层说明先卸载旧版，再双击「双击安装 Claude Guard.app」；首次安装跳过卸载，**无需拖入应用程序文件夹**。根据图形提示完成管理员授权，成功后选择打开 App。更新前请先在旧版菜单栏选择「恢复并退出」。不要直接删除旧助手或恢复记录。
 
@@ -76,7 +79,7 @@ Claude Guard 面向这样的使用场景：你已经准备好一个 **数字 IPv
 
 **网关 ≠ 出口。** IP 检测只用于预期出口，绝不自动推断网关或端口。即使两者恰好相同，也要分别核对。问号按钮提供同样的填写说明。
 
-先在“网络设置 → 读取 FLClash 配置”按订阅名称选择当前使用的单节点 HTTP 配置，再点“选择并登记”；特殊位置或其他客户端可用“手动选择文件”。登记成功仅代表候选配置通过，尚未证明 Core 使用它。随后核对候选网关和指纹，点击「确认代理端点」。若提示 IPv6 默认路由存在，在 OFF 且 Claude/Code 退出后点击临时 IPv6“关闭”。本版不会把 `ipv6: false` 当作系统 IPv6 已关闭的证明。
+先在“网络设置 → 读取 FLClash 配置”按订阅名称选择当前使用的配置（链式需选择包含扩展结果的生成配置），再点“选择并登记”；特殊位置或其他客户端可用“手动选择文件”。登记成功仅代表候选配置通过，尚未证明 Core 使用它。随后选择直连或链式模式，核对最终 ISP 网关、端口和预期出口。链式模式额外选择固定前置，点击「读取前置连接」，核对当前 IPv4 后再点「确认代理端点」。候选连接不等于已确认链路，启动时会重新核验。若提示 IPv6 默认路由存在，在 OFF 且 Claude/Code 退出后点击临时 IPv6“关闭”。本版不会把 `ipv6: false` 当作系统 IPv6 已关闭的证明。
 
 ### 5. 先验收，再日常使用
 
@@ -299,8 +302,8 @@ PF 与运行态核验仍通过、且本轮进程清单已经完整恢复时，�
 
 最终采样暂缺已建立网关连接时，保留 PF，最多重跑一次完整验证。仍要求真实连接、正确出口和全部防护检查通过；不放宽 PF 或稳态监控。操作及恢复步骤见 [本版说明](docs/RELEASE-0.5.26.md)。
 
-## 0.5.27：独立 UDP 防护（候选）
+## 0.5.27：独立 UDP 防护与固定链式入口
 
 新增无需启动 Claude 的全机 UDP 限制，与完整 Claude 防护互斥。UDP 模式不管理应用、不限制 TCP、不保证加拿大出口。开启后 UDP 代理、传统 DNS、部分音视频可能不可用。
 
-链式完整防护尚未支持。本模式可以配合 TCP 链式代理使用，但不能将它当作链路或固定出口验证。详见 [候选说明与恢复步骤](docs/RELEASE-0.5.27.md)。
+完整防护新增固定 TCP 前置 + HTTP ISP 落地的最小链式适配，继续保持物理出口默认拒绝。它核验入口连接和公网出口，不宣称逐请求证明内层转发。详见 [版本说明与恢复步骤](docs/RELEASE-0.5.27.md)。

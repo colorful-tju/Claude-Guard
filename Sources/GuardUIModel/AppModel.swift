@@ -76,6 +76,14 @@ import GuardCore
         }
     }
     public var readyToQuit:Bool {state.phase=="off" && state.ipv6Override=="未临时修改" && !busy}
+    public var networkPathSummary:String {
+        let landing=state.gateway.isEmpty ? "待核对":state.gateway
+        if settings.effectivePathMode == .chain {
+            let physical=state.phase=="armed" ? (state.physicalGateway ?? "待核验") : (settings.entryIPv4 ?? "待确认")
+            return "前置：\(physical) → ISP：\(landing)"
+        }
+        return "ISP 网关：\(landing)"
+    }
     public var menuStatus:String {
         if busy{return "处理中"}
         if state.phase=="armed",state.egressRechecking==true {return "出口待核验"}

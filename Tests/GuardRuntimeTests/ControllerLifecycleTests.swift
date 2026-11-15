@@ -24,6 +24,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     var localPort:UInt16=50000
     var rules="",reference=false,enabled=false
     var denyPackets:UInt64=10,probePackets:UInt64=3,invalidLabels=false
+    var chainEnabled=false,chainIdle=false
     var views=0,launches=0
     var beforeView:((Int)->Void)?
     var beforeDiagnostic:(()->Void)?
@@ -58,7 +59,7 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     }
     deinit {try? FileManager.default.removeItem(atPath:root)}
     func step(_ name:String) throws {calls.append(name);if failure==name{throw fail("Injected failure: "+name)}}
-    var settings:Settings {var s=Settings();s.gateway="23.20.10.8";s.port=5376;s.expectedEgress="1.1.1.1";s.confirmationFingerprint="config";s.providerConfirmed=true;return s}
+    var settings:Settings {var s=Settings();s.gateway="23.20.10.8";s.port=5376;s.expectedEgress="1.1.1.1";s.confirmationFingerprint="config";s.providerConfirmed=true;if chainEnabled {s.pathMode = .chain;s.entryName="Entry";s.entryIPv4="1.2.3.4"};return s}
     func makeController() throws -> Controller {
         let effects=ControllerEffects(commands:Commands(),pf:self,inspector:self,storage:self,clock:clock,
             uiIdentity:{pid in .init(pid:pid,startTime:1,executableIdentity:"ui")},uiAlive:{[self] _ in uiPresent},
@@ -79,14 +80,19 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
     }
     func configuration(path:String) throws -> NodeConfiguration {try step("candidate");configurationReads+=1;onConfigurationCheck?();var result=try node();if failure=="changed" && configurationReads>1 {result.fingerprint="changed"};return result}
     func adoptConfiguration(path:String) {adoptedPath=path}
-    func node() throws -> NodeConfiguration {.init(name:"Webshare-Canada",type:"http",server:"23.20.10.8",port:5376,fingerprint:"config",numeric:true,tunDevice:"utun4")}
+    func node() throws -> NodeConfiguration {
+        var n=NodeConfiguration(name:"Webshare-Canada",type:"http",server:"23.20.10.8",port:5376,fingerprint:"config",numeric:true,tunDevice:"utun4")
+        if chainEnabled {n.chain = .init(dialer:"Front",entries:[.init(name:"Entry",type:"vless",server:"1.2.3.4",port:443)])}
+        return n
+    }
     func runtime(settings:Settings) throws -> RuntimeEvidence {
         try step("runtime");runtimeReads += 1
         if let error=runtimeFailure?(runtimeReads) {throw error}
         let core=ProcessIdentity(pid:2345,startTime:100,executableIdentity:"core")
         let physical=InterfaceIdentity(name:"en0",index:6,generation:identityGeneration,ipv4:"172.21.191.84")
         let tun=InterfaceIdentity(name:"utun4",index:20,generation:identityGeneration,ipv4:"198.18.0.1")
-        return .init(node:try node(),core:core,connection:.init(owner:core,gateway:"23.20.10.8",port:5376,localAddress:physical.ipv4,localPort:localPort,established:true),network:.init(interfaces:[physical,tun],detail:"interfaces",physical:physical,tun:tun,ipv6Routable:false),inventory:.init(records:claude,issues:inventoryIssues),routeFingerprint:routeFingerprint,routeDetail:routeDetail,epoch:epochValue,claude:claude.map(\.identity))
+        let path=try ProxyPath.resolve(node:node(),settings:settings)
+        return .init(chainBoundary:path.chain,node:try node(),core:core,connection:.init(owner:core,gateway:path.gateway,port:path.port,localAddress:physical.ipv4,localPort:chainIdle ? 0:localPort,established:!chainIdle),network:.init(interfaces:[physical,tun],detail:"interfaces",physical:physical,tun:tun,ipv6Routable:false),inventory:.init(records:claude,issues:inventoryIssues),routeFingerprint:routeFingerprint,routeDetail:routeDetail,epoch:epochValue,claude:claude.map(\.identity))
     }
     func epoch() throws -> UInt64 {try step("epoch");return epochValue}
     func exists(_ name:String)->Bool {privateFiles.exists(name)}
@@ -121,6 +127,18 @@ private final class LifecycleFixture:PacketFiltering,ControllerStorage,RuntimeIn
 }
 
 struct ControllerLifecycleTests {
+    @Test func chainControllerUsesPhysicalEntryAndRetainsProtectionWhileIdle() throws {
+        let f=try LifecycleFixture();f.chainEnabled=true
+        let c=try f.makeController();c.heartbeat();try c.begin(f.settings,launch:false)
+        let journal=try f.readJournal()
+        #expect(c.status.phase=="armed" && journal.policy.endpoint.gateway=="1.2.3.4")
+        #expect(journal.policy.endpoint.chain?.landingGateway=="23.20.10.8")
+        #expect(c.status.gateway=="23.20.10.8:5376" && c.status.physicalGateway=="1.2.3.4:443")
+        f.chainIdle=true;c.tick()
+        #expect(c.status.phase=="armed" && c.status.verified && f.reference)
+        f.rules="tampered";c.tick()
+        #expect(!c.status.verified && f.calls.contains("terminate"))
+    }
     @Test func missingFinalGatewaySocketRevalidatesWithoutDroppingPF() throws {
         let f=try LifecycleFixture(),c=try f.makeController();c.heartbeat()
         f.runtimeFailure={n in n == 3 ? GatewaySocketUnavailable(physicalAddress:"172.21.191.84") : nil}

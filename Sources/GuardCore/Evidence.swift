@@ -71,7 +71,7 @@ public struct LocalSnapshot: Equatable, Sendable, Codable {
     public func differingFields(from other:LocalSnapshot) -> [String] {
         var fields:[String]=[]
         func check<T:Equatable>(_ name:String,_ left:T,_ right:T){if left != right{fields.append(name)}}
-        check("epoch",epoch,other.epoch);check("interfaces",interfaces,other.interfaces)
+        check("chain",chain,other.chain);check("epoch",epoch,other.epoch);check("interfaces",interfaces,other.interfaces)
         check("routeFingerprint",routeFingerprint,other.routeFingerprint)
         check("configurationFingerprint",configurationFingerprint,other.configurationFingerprint)
         check("nodeName",nodeName,other.nodeName);check("gateway",gateway,other.gateway)
@@ -90,6 +90,7 @@ public struct LocalSnapshot: Equatable, Sendable, Codable {
         check("ipv6Routable",ipv6Routable,other.ipv6Routable)
         return fields
     }
+    public var chain:ChainBoundary? = nil
     public var epoch: UInt64
     public var interfaces: [InterfaceIdentity]
     public var routeFingerprint: String
@@ -186,19 +187,20 @@ public enum SafetyGate {
         }
         try validateRuntimePaths(s,policy:p)
     }
-    private static func validateRuntimePaths(_ s: LocalSnapshot, policy p: GuardPolicy) throws {
+    private static func validateRuntimePaths(_ s: LocalSnapshot, policy p: GuardPolicy, allowIdleChain:Bool=false) throws {
         guard s.interfaces.contains(p.physical), s.interfaces.contains(p.tun),
               Set(s.interfaces.map(\.name)).count == s.interfaces.count,
               Set(s.interfaces.map(\.index)).count == s.interfaces.count,
               !s.routeFingerprint.isEmpty,
               s.configurationFingerprint == p.endpoint.configurationFingerprint,
               !s.nodeName.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty, s.gateway == p.endpoint.gateway,
-              s.gatewayPort == p.endpoint.port, s.protocolName == "http",
+              s.gatewayPort == p.endpoint.port, s.chain == p.endpoint.chain, s.protocolName == (p.endpoint.chain?.entryProtocol ?? "http"),
               s.flclashRunning, s.coreIdentityVerified, s.core.pid > 0,
               s.core.startTime > 0, !s.core.executableIdentity.isEmpty,
-              s.connection.owner == s.core, s.connection.established,
+              s.connection.owner == s.core,
+              ((s.connection.established && s.connection.localPort>0) || (allowIdleChain && p.endpoint.chain != nil && !s.connection.established && s.connection.localPort==0)),
               s.connection.gateway == p.endpoint.gateway, s.connection.port == p.endpoint.port,
-              s.connection.localAddress == p.physical.ipv4, s.connection.localPort > 0,
+              s.connection.localAddress == p.physical.ipv4,
               s.verifiedTun == p.tun, s.tunRuntimeVerified,
               s.stateInventoryComplete else {
             throw GuardFailure.rejected("Incomplete runtime node, process, interface or TUN evidence")
@@ -213,7 +215,13 @@ public enum SafetyGate {
         try validateProtection(s,policy:p)
     }
     public static func validateProtection(_ s:LocalSnapshot,policy p:GuardPolicy) throws {
-        try validateRuntimePaths(s,policy:p)
+        try validateProtectionFields(s,policy:p,allowIdleChain:false)
+    }
+    static func validateMonitoringProtection(_ s:LocalSnapshot,policy p:GuardPolicy) throws {
+        try validateProtectionFields(s,policy:p,allowIdleChain:true)
+    }
+    private static func validateProtectionFields(_ s:LocalSnapshot,policy p:GuardPolicy,allowIdleChain:Bool) throws {
+        try validateRuntimePaths(s,policy:p,allowIdleChain:allowIdleChain)
         guard s.pfEnabled, !s.ownReference.isEmpty, s.rulesFingerprint == p.rulesFingerprint,
               !s.mainRulesFingerprint.isEmpty, s.pfEnvironmentCompatible,
               s.rulesAreStateless, s.anchorReachable else {
@@ -262,7 +270,7 @@ public enum MonitoringGate {
     }
     private static func validateProtection(_ current:LocalSnapshot,baseline:LocalSnapshot,policy:GuardPolicy) throws {
         // Process completeness belongs to lifecycle gates. Controller reports degraded observation without treating missing metadata as protection failure.
-        try SafetyGate.validateProtection(current,policy:policy)
+        try SafetyGate.validateMonitoringProtection(current,policy:policy)
         guard Set(current.states.map(\.id)).isSubset(of:Set(baseline.states.map(\.id))) else{throw GuardFailure.rejected("New state appeared during stateless monitoring")}
         let fields=changedPremises(current,baseline:baseline)
         guard fields.isEmpty else{throw GuardFailure.rejected("Protected runtime premises changed: "+fields.joined(separator:","))}
@@ -273,6 +281,7 @@ public enum MonitoringGate {
         // A fresh established socket owned by the SAME verified Core and endpoint is expected HTTP behavior.
         // Startup's final snapshot comparison remains exact and does not permit this renewal.
         expected.connection.localPort=current.connection.localPort
+        if baseline.chain != nil {expected.connection.established=current.connection.established}
         var fields=expected.differingFields(from:current).filter{$0 != "processInventoryComplete"}
         if !Set(current.states.map(\.id)).isSubset(of:Set(baseline.states.map(\.id))) {fields.append("states")}
         return fields

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import GuardCore
 import GuardRuntime
 import GuardUIModel
 
@@ -31,6 +32,11 @@ final class WindowLifecycle:NSObject,NSApplicationDelegate {
                 .init(path:"/Users/example/Library/Application Support/com.follow.clash/profiles/123.yaml",name:"123.yaml",modifiedAt:Date(),generated:false,summary:.init(nodeCount:1,httpCount:1,providerCount:0,errorCode:nil)),
                 .init(path:"/Users/example/Library/Application Support/com.follow.clash/profiles/456.yaml",name:"456.yaml",modifiedAt:Date(),generated:false,summary:.init(nodeCount:2,httpCount:1,providerCount:1,errorCode:nil)),
                 .init(path:"/Users/example/Library/Application Support/com.follow.clash/config.yaml",name:"生成配置（不保证是当前订阅）",modifiedAt:Date(),generated:true)])}
+            if scenario=="chain" {
+                sample.settings.pathMode = .chain;sample.settings.entryName="前置 TCP";sample.settings.entryIPv4="1.2.3.4"
+                sample.state.chainCandidate = .init(dialer:"手动前置",entries:[.init(name:"前置 TCP",type:"vless",server:"entry.example",port:443)])
+                sample.state.entryCandidates=["1.2.3.4"];sample.state.gateway="8.8.4.4:8080";sample.state.fingerprint="preview"
+            }
             sample.testingIP=scenario=="loading"
             if scenario=="udp" {sample.state.protectionMode = .udpOnly;sample.state.phase="armed";sample.state.verified=true;sample.state.blockedPackets=128}
             if scenario=="armed" {sample.state.phase="armed";sample.state.verified=true;sample.state.claude=true;sample.state.blockedPackets=128}
@@ -104,7 +110,7 @@ private struct WelcomeView:View {
     private let descriptions=[
         "启动器先验证代理出口与防护，再启动 Claude。IP 匹配只是其中一项检查。当前仍是本机测试版，首次通过图形程序完成管理员授权。",
         "由你手动启动已登记的兼容代理核心、选择 HTTP 节点并开启 TUN。启动器不会切换代理。若主页面提醒存在 IPv6 默认路由，先退出 Claude/Code，再点击临时关闭 IPv6。",
-        "下一步进入网络设置，点“读取 FLClash 配置”，按订阅名称选择并登记当前使用的单节点 HTTP 配置；其他客户端可手动选文件。你需要核对服务商提供的网关、端口和预期出口。内置 IP 检测只能辅助填写预期出口，不能推断网关或端口。",
+        "下一步进入网络设置，点“读取 FLClash 配置”，按订阅名称选择并登记当前使用的配置；链式模式需包含拓展结果的生成配置；其他客户端可手动选文件。你需要核对服务商提供的网关、端口和预期出口。内置 IP 检测只能辅助填写预期出口，不能推断网关或端口。",
         "关闭主窗口后，菜单栏与防护继续运行。菜单栏的「恢复并退出」会先结束受保护的 Claude/Code、恢复本工具设置再退出；恢复失败会留在应用中。配置会记住，防护不会自动开启。"
     ]
     var body:some View {
@@ -177,7 +183,7 @@ private struct LauncherView:View {
                 ToolbarItem {Button{model.export()}label:{Label("导出反馈",systemImage:"square.and.arrow.up")}}
             }
         }.frame(minWidth:1100,minHeight:660)
-        .task {if preview {if previewPage=="about" {page = .about};if previewPage=="network" {page = .network}};if !preview {showWelcome = !model.onboardingComplete;model.poll();model.testIP()}}
+        .task {if preview {if previewPage=="about" {page = .about};if previewPage=="network" || previewPage=="chain" {page = .network}};if !preview {showWelcome = !model.onboardingComplete;model.poll();model.testIP()}}
         .sheet(isPresented:$showWelcome){WelcomeView(model:model){showWelcome=false;page = .network}}
         .sheet(isPresented:$showFlClashPicker){FlClashPicker(model:model)}
         .onChange(of:model.state.phase){_,_ in model.ipStale=true}
@@ -238,7 +244,7 @@ private struct LauncherView:View {
             }
             HStack(spacing:10) {
                 endpointButton
-                Text("网关：\(model.state.gateway.isEmpty ? "先检测配置，再核对服务商端点":model.state.gateway)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(model.networkPathSummary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength:0)
             }
             HStack(alignment:.top,spacing:12) {
@@ -329,12 +335,39 @@ private struct LauncherView:View {
                     Button("手动选择文件…"){model.chooseProxyConfiguration()}.buttonStyle(.bordered)
                 }.disabled(model.busy || model.state.phase != "off")
             }
-            card("代理端点",icon:"server.rack") {
+            card("代理路径与端点",icon:"server.rack") {
+                Picker("连接方式",selection:Binding(get:{model.settings.effectivePathMode},set:{model.settings.pathMode=$0})) {
+                    Text("直连 ISP").tag(ProxyPathMode.direct)
+                    Text("链式代理").tag(ProxyPathMode.chain)
+                }.pickerStyle(.segmented)
+                if model.settings.effectivePathMode == .chain {
+                    Text("完整防护仅放行固定前置 TCP；同时核验预期出口。不会观察或证明每条请求的内层链路。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Picker("固定前置",selection:Binding(get:{model.settings.entryName ?? ""},set:{model.settings.entryName=$0;model.settings.entryIPv4=nil})) {
+                        Text("请选择配置中的 TCP 前置").tag("")
+                        ForEach(model.state.chainCandidate?.entries ?? [],id:\.name) {entry in
+                            Text("\(entry.name) · \(entry.type) · \(entry.server):\(entry.port)").tag(entry.name)
+                        }
+                    }
+                    HStack {
+                        TextField("固定前置公网 IPv4",text:Binding(get:{model.settings.entryIPv4 ?? ""},set:{model.settings.entryIPv4=$0}))
+                        Button("读取前置连接"){model.confirmation=false;model.request(.inspect)}
+                    }
+                    if let warning=model.state.entryCandidateWarning {Text(warning).font(.caption).foregroundStyle(.orange)}
+                    if let candidates=model.state.entryCandidates,!candidates.isEmpty {
+                        ScrollView(.horizontal) {HStack {ForEach(candidates,id:\.self) {ip in
+                            Button(ip){model.settings.entryIPv4=ip}.buttonStyle(.bordered)
+                        }}}
+                    }
+                    Text("先在代理软件固定前置，再读取连接并核对 IPv4。候选只证明该 Core 有连接，多个候选时勿猜选；端口取自配置。域名不被改写，IP 变化需关闭防护后重新确认。请选择包含扩展脚本结果的生成配置。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text("最终 ISP（以下网关不是前置机场）").font(.caption.bold())
                 Text("首次使用不预填地址。网关 / 端口来自代理服务商；公网 IP 检测只能辅助填写预期出口。").font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Text("如何填写端点？").font(.caption)
                     Button{showEndpointHelp=true}label:{Image(systemName:"questionmark.circle")}.buttonStyle(.plain)
-                        .popover(isPresented:$showEndpointHelp){Text("① 网关 IP 和端口：查看服务商控制面板或代理软件当前节点。需明确支持的数字 IPv4 HTTP endpoint，不能把域名自行替换为 IP。\n\n② 预期出口：先手动准备代理，再运行内置 IP 检测；点击「检测并填入出口 IP」，两个服务一致时自动填写。这不会填写网关或端口，也不证明已受到保护。\n\n③ 端口无法通过出口检测推断；0 表示尚未填写。网关与出口即使相同，也要分别确认。\n\n④ 兼容范围：安装时登记的核心 + 单节点 HTTP 的 Mihomo 配置。其他格式 / VPN 未支持，出口一致也不会绕过验证。").font(.callout).padding(20).frame(width:380)}
+                        .popover(isPresented:$showEndpointHelp){Text("① 网关 IP 和端口：查看服务商控制面板或代理软件当前节点。需明确支持的数字 IPv4 HTTP endpoint，不能把域名自行替换为 IP。\n\n② 预期出口：先手动准备代理，再运行内置 IP 检测；点击「检测并填入出口 IP」，两个服务一致时自动填写。这不会填写网关或端口，也不证明已受到保护。\n\n③ 端口无法通过出口检测推断；0 表示尚未填写。网关与出口即使相同，也要分别确认。\n\n④ 直连：单 HTTP 节点。链式：内层 HTTP ISP + 配置内手动 select 的 TCP 前置；固定前置 IPv4，拒绝 UDP 外层。不启用控制 API，不自动切换节点。其他格式 / VPN 未支持。").font(.callout).padding(20).frame(width:380)}
                     Spacer()
                 }
                 HStack{TextField("Gateway IPv4",text:$model.settings.gateway);TextField("端口",value:$model.settings.port,format:.number.grouping(.never)).frame(width:95);TextField("接口",text:$model.settings.physical).frame(width:70)}

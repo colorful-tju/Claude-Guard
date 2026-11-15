@@ -62,6 +62,9 @@ public struct Guidance:Equatable {
         if raw.contains("Unique registered proxy Core") || raw.contains("TUN") {
             return .init("需要操作","尚未确认 已登记代理 的虚拟网卡","手动准备 已登记代理、HTTP 节点与 TUN，然后重新检测配置。")
         }
+        if raw.contains("Chain ") || raw.contains("chain mode") {
+            return .init("链式配置待确认","前置与落地尚未匹配","在网络设置选链式模式、登记生成配置，固定 TCP 前置并核对当前 IPv4，再确认端点。")
+        }
         if raw.contains("Provider endpoint confirmation") {
             return .init("需要操作","当前端点尚未确认或配置已改变","重新检测配置，核对服务商网关与端口，再点击「确认代理端点」。")
         }

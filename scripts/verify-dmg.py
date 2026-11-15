@@ -39,7 +39,7 @@ try:
         app=tmp/'ClaudeSafeLauncher.app'
         run('/usr/bin/codesign','--verify','--strict','--deep',str(app))
         info=plistlib.loads((app/'Contents/Info.plist').read_bytes())
-        assert info['CFBundleVersion']=='54' and info['CFBundleIconFile']=='AppIcon'
+        assert info['CFBundleVersion']=='55' and info['CFBundleIconFile']=='AppIcon'
         assert run('/usr/bin/lipo','-archs',str(app/'Contents/MacOS/ClaudeSafeLauncher')).strip()==arch.encode()
         resources=app/'Contents/Resources'
         assert (resources/'profile-summaries.rb').read_bytes()==(root/'Resources/profile-summaries.rb').read_bytes()
@@ -64,6 +64,6 @@ try:
             print(run(str(resources/'guard-probe'),'--self-test').decode().strip())
             print(run(str(resources/'guard-daemon'),'--self-test-timer').decode().strip())
         else: print('Intel cross-build: static verification only; no Intel hardware acceptance')
-    print(f'PASS DMG: installer signed; payload matches; {arch} build54; ten icon sizes; recovery parity')
+    print(f'PASS DMG: installer signed; payload matches; {arch} build55; ten icon sizes; recovery parity')
 finally:
     if mount is not None:run('/usr/bin/hdiutil','detach',str(mount))

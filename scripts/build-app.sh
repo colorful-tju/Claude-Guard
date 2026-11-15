@@ -33,7 +33,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleExecutable</key><string>ClaudeSafeLauncher</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.5.27</string>
-<key>CFBundleVersion</key><string>54</string>
+<key>CFBundleVersion</key><string>55</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>NSHighResolutionCapable</key><true/>

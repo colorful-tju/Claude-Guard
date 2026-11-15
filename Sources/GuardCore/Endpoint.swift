@@ -8,6 +8,7 @@ public enum GuardFailure: Error, Equatable, Sendable, Codable {
 }
 
 public struct Endpoint: Equatable, Sendable, Codable {
+    public let chain:ChainBoundary?
     public let gateway: String
     public let port: UInt16
     public let expectedEgress: String
@@ -16,14 +17,16 @@ public struct Endpoint: Equatable, Sendable, Codable {
     public init(gateway: String, port: UInt16, expectedEgress: String,
                 configurationFingerprint: String, providerConfirmed: Bool,
                 confirmedGateway: String, confirmedPort: UInt16,
-                confirmedFingerprint: String, protocolName: String) throws {
+                confirmedFingerprint: String, protocolName: String, chain:ChainBoundary? = nil) throws {
         guard IPv4.isPublic(gateway) else { throw GuardFailure.unsupported("Provider numeric public IPv4 endpoint required") }
         guard IPv4.isPublic(expectedEgress), port > 0 else { throw GuardFailure.invalidEndpoint("Invalid egress or port") }
-        guard protocolName == "http" else { throw GuardFailure.unsupported("Only direct HTTP/TCP is supported") }
+        if let chain {try chain.validate();guard protocolName==chain.entryProtocol else{throw GuardFailure.unsupported("Chain entry protocol mismatch")}}
+        else {guard protocolName == "http" else { throw GuardFailure.unsupported("Only direct HTTP/TCP is supported") }}
         guard providerConfirmed, gateway == confirmedGateway, port == confirmedPort,
               !configurationFingerprint.isEmpty, configurationFingerprint == confirmedFingerprint else {
             throw GuardFailure.invalidEndpoint("Provider confirmation must bind the exact endpoint and configuration")
         }
+        self.chain = chain
         self.gateway = gateway
         self.port = port
         self.expectedEgress = expectedEgress

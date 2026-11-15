@@ -20,6 +20,7 @@ public protocol PacketFiltering: Sendable {
 public protocol RuntimeInspecting: Sendable {
     func configuration(path:String) throws -> NodeConfiguration
     func adoptConfiguration(path:String)
+    func physicalEntryCandidates(settings:Settings) throws -> [String]
     func node() throws -> NodeConfiguration
     func runtime(settings:Settings) throws -> RuntimeEvidence
     func monitoringRuntime(settings:Settings) throws -> RuntimeEvidence
@@ -27,6 +28,7 @@ public protocol RuntimeInspecting: Sendable {
     func networkEventDiagnostics() -> [String]
 }
 extension RuntimeInspecting {
+    public func physicalEntryCandidates(settings:Settings) throws -> [String] {[]}
     public func monitoringRuntime(settings:Settings) throws -> RuntimeEvidence {try runtime(settings:settings)}
     public func networkEventDiagnostics()->[String] {[]}}
 extension Inspector: RuntimeInspecting {
