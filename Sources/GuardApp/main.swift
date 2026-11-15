@@ -331,9 +331,13 @@ private struct LauncherView:View {
                 Text("不要选旧订阅或仅为通过检查导出的文件。配置登记只提供候选节点，实际 Core/网关/TUN/出口仍须验证。")
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {
-                    Button("读取 FLClash 配置…"){model.readFlClashConfigurations();showFlClashPicker=true}.buttonStyle(.borderedProminent)
+                    Button("读取 FLClash 当前链路"){model.readFlClashCurrentChain()}.buttonStyle(.borderedProminent)
+                    Button("选择 FLClash 配置…"){model.readFlClashConfigurations();showFlClashPicker=true}.buttonStyle(.bordered)
                     Button("手动选择文件…"){model.chooseProxyConfiguration()}.buttonStyle(.bordered)
-                }.disabled(model.busy || model.state.phase != "off")
+                }.disabled(model.busy || model.readingFlClash || model.state.phase != "off")
+                if !model.currentChainMessage.isEmpty {Text(model.currentChainMessage).font(.caption).foregroundStyle(.secondary)}
+                Text("链式代理：读取当前链路会登记脚本处理后的生成配置，并按 FLClash 保存的选择预填前置节点；不会切换代理或自动确认安全。")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             card("代理路径与端点",icon:"server.rack") {
                 Picker("连接方式",selection:Binding(get:{model.settings.effectivePathMode},set:{model.settings.pathMode=$0})) {
@@ -501,7 +505,7 @@ private struct FlClashPicker:View {
                 Button("刷新"){selection=nil;model.readFlClashConfigurations()}
                     .disabled(model.readingFlClash || model.busy || model.state.phase != "off")
             }
-            Text("按 FLClash 中的订阅名称选择。这里只登记候选配置，不会切换 FLClash 的订阅或节点，也不代表已验证防护。")
+            Text("直连可按订阅名称选择；链式优先在网络设置点击「读取 FLClash 当前链路」，或选择包含拓展脚本结果的生成配置。不会切换订阅或节点。")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
             if model.readingFlClash {
                 HStack{ProgressView().controlSize(.small);Text("正在读取本机配置列表…")}.frame(maxWidth:.infinity,maxHeight:.infinity)
@@ -530,7 +534,7 @@ private struct FlClashPicker:View {
                     }.listStyle(.inset).clipShape(RoundedRectangle(cornerRadius:12))
                 }
             } else {Spacer()}
-            Text("数量仅统计文件内 proxies，不下载外部节点。仅支持单节点 HTTP；预览不代替登记和运行态验证。")
+            Text("数量仅统计文件内 proxies。直连使用单 HTTP 节点；链式使用含 HTTP ISP 落地的生成配置，可含多个前置节点。预览不代替运行态验证。")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("取消"){dismiss()}.keyboardShortcut(.cancelAction)

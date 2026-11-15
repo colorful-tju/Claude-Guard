@@ -5,8 +5,8 @@ public struct ChainEntry:Codable,Sendable,Equatable {
     public init(name:String,type:String,server:String,port:UInt16){self.name=name;self.type=type;self.server=server;self.port=port}
 }
 public struct ChainConfiguration:Codable,Sendable,Equatable {
-    public var dialer:String;public var entries:[ChainEntry]
-    public init(dialer:String,entries:[ChainEntry]){self.dialer=dialer;self.entries=entries}
+    public var dialer:String;public var entries:[ChainEntry];public var groups:[String:[String]]?
+    public init(dialer:String,entries:[ChainEntry],groups:[String:[String]]?=nil){self.dialer=dialer;self.entries=entries;self.groups=groups}
 }
 public struct ProxyPath:Sendable {
     public let gateway:String;public let port:UInt16;public let protocolName:String;public let chain:ChainBoundary?

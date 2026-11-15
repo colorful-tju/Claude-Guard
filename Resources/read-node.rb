@@ -33,6 +33,7 @@ begin
     reject('chain-shape') unless groups.is_a?(Array) && (nodes+groups).all?{|x| x.is_a?(Hash) && x['name'].is_a?(String)}
     all=nodes+groups
     reject('chain-shape') unless all.map{|x|x['name']}.uniq.length==all.length
+    topology={}
     reachable=lambda do |name,seen|
       reject('chain-shape') if seen.include?(name) || seen.length>8
       item=all.find{|x|x['name']==name}
@@ -42,6 +43,7 @@ begin
       members=item['proxies'] || []
       reject('chain-shape') unless members.is_a?(Array) && members.all?{|x|x.is_a?(String)}
       members=members+nodes.reject{|x|x==n}.map{|x|x['name']} if item['include-all']==true || item['include-all-proxies']==true
+      topology[name]=members.uniq
       members.uniq.flat_map{|x|reachable.call(x,seen+[name])}
     end
     entries=reachable.call(n['dialer-proxy'],[n['name']]).uniq.select do |e|
@@ -54,7 +56,7 @@ begin
     end
     reject('chain-entry') if entries.empty?
     reject('chain-size') if entries.length>128 || entries.any?{|e| e['name'].bytesize>192 || e['server'].bytesize>253}
-    chain={dialer:n['dialer-proxy'],entries:entries.map{|e|{name:e['name'],type:e['type'],server:e['server'],port:e['port']}}}
+    chain={dialer:n['dialer-proxy'],groups:topology,entries:entries.map{|e|{name:e['name'],type:e['type'],server:e['server'],port:e['port']}}}
     reject('chain-size') if JSON.generate(chain).bytesize>28000
   else
     reject('providers') unless (d['proxy-providers'] || {}).empty?

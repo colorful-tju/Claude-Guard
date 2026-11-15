@@ -14,6 +14,12 @@ class ParserTests(unittest.TestCase):
     if valid:
      self.assertEqual(json.loads(stdin.stdout),json.loads(result.stdout))
      self.assertEqual(json.loads(stdin.stdout)['fingerprint'],hashlib.sha256(path.read_bytes()).hexdigest())
+ def test_chain_exposes_only_reachable_manual_group_topology(self):
+  raw={'mode':'rule','proxies':[{'name':'Entry','type':'vless','server':'entry.example','port':443,'uuid':'NEVER_EMIT_SECRET'},{'name':'ISP','type':'http','server':'8.8.4.4','port':80,'dialer-proxy':'Front'}],'proxy-groups':[{'name':'Front','type':'select','proxies':['Region']},{'name':'Region','type':'select','proxies':['Entry']},{'name':'Unused','type':'select','proxies':['NEVER_EMIT_SECRET']}],'rules':['MATCH,ISP']}
+  result=subprocess.run(['/usr/bin/ruby','Resources/read-node.rb','--stdin'],input=json.dumps(raw).encode(),capture_output=True)
+  self.assertEqual(result.returncode,0)
+  self.assertEqual(json.loads(result.stdout)['chain'].get('groups'),{'Front':['Region'],'Region':['Entry']})
+  self.assertNotIn(b'NEVER_EMIT_SECRET',result.stdout)
  def test_friend_old_config_reports_count_without_secrets(self):
   raw=json.dumps({'mode':'rule','proxies':[{'name':'private-name','type':'trojan','password':'NEVER_EMIT_SECRET'}]*22})
   result=subprocess.run(['/usr/bin/ruby','Resources/read-node.rb','--stdin'],input=raw.encode(),capture_output=True)

@@ -96,6 +96,7 @@ import GuardCore
     @Published public var flclashCatalog:FlClashCatalog?
     @Published public var readingFlClash=false
     @Published public var flclashCatalogError=""
+    @Published public var currentChainMessage=""
     private let transport:@Sendable (Request)throws->Reply
     private let preferences:UserDefaults?
     private var timer:Timer?
@@ -172,7 +173,7 @@ import GuardCore
             }
         }
     }
-    @discardableResult public func request(_ operation:GuardOperation,configurationPath:String?=nil)->Task<Void,Never>? {
+    @discardableResult public func request(_ operation:GuardOperation,configurationPath:String?=nil,currentChain:FlClashCurrentChain?=nil)->Task<Void,Never>? {
         if [.stop,.shutdown].contains(operation) {guard !stopping else{return nil};stopping=true}
         else {guard !busy else{return nil}}
         if [.refreshClaudeRegistration,.registerProxyConfiguration].contains(operation) {guard state.phase=="off" else{return nil}}
@@ -183,7 +184,7 @@ import GuardCore
             guard state.phase=="off" else{return nil}
             if needsIPv6Off {failure="IPv6 default route detected";return nil}
         }
-        revision+=1;let version=revision
+        revision+=1;let version=revision,configVersion=settingsRevision
         busy=true;failure="";pfIssueAlert=nil;state.verified=false;ipStale=true
         if [.stop,.shutdown].contains(operation){state.phase="stopping"}
         else if [.udpStart,.start,.verify].contains(operation){state.phase="checking"}
@@ -205,7 +206,19 @@ import GuardCore
                         self.confirmation=false
                         if reply.ok {
                             let endpoint=reply.status.gateway.split(separator:":")
+                            let unchanged=self.settingsRevision==configVersion
                             if endpoint.count==2,let port=UInt16(endpoint[1]) {self.settings.gateway=String(endpoint[0]);self.settings.port=port}
+                            if let hint=currentChain {
+                                guard unchanged,reply.status.phase=="off",reply.status.configurationPath==hint.configurationPath,
+                                      reply.status.fingerprint==hint.node.fingerprint,
+                                      reply.status.chainCandidate?.entries.contains(hint.entry)==true else {
+                                    self.failure="FLClash 配置或设置在登记期间改变，未应用前置选择；请重新读取。";return
+                                }
+                                self.settings.pathMode = .chain;self.settings.entryName=hint.entry.name
+                                // Domain entries require an observed physical connection, never DNS substitution.
+                                self.settings.entryIPv4=IPv4.isPublic(hint.entry.server) ? hint.entry.server:nil
+                                self.currentChainMessage="已读取：\(hint.profileLabel) → \(hint.entry.name)。这是保存的选择；请核对前置连接和端点，再启动验证。"
+                            }
                         }
                     }
                     if operation == .start,reply.status.claudeRegistrationRequired==true {self.registrationAlert=true}
@@ -264,10 +277,30 @@ import GuardCore
             }
         }
     }
+    @discardableResult public func readFlClashCurrentChain(read:@escaping @Sendable ()throws->FlClashCurrentChain = {try FlClashCurrentChain.read()})->Task<Void,Never>? {
+        guard !busy,!readingFlClash,state.phase=="off" else{return nil}
+        readingFlClash=true;currentChainMessage="正在读取 FLClash 当前链路…";confirmation=false
+        let version=revision,configVersion=settingsRevision
+        return Task { [weak self] in
+            let result=await Task.detached {Result{try read()}}.value
+            guard let self else{return};self.readingFlClash=false
+            guard version==self.revision,configVersion==self.settingsRevision,!self.busy,self.state.phase=="off" else {
+                self.currentChainMessage="读取期间状态或设置已变化，结果未应用。";return
+            }
+            switch result {
+            case .success(let hint):
+                self.currentChainMessage="已读取保存的选择，正在登记生成配置…"
+                await self.request(.registerProxyConfiguration,configurationPath:hint.configurationPath,currentChain:hint)?.value
+                if !self.failure.isEmpty {self.currentChainMessage="当前链路未完成读取或登记，请查看错误信息。"}
+            case .failure(let error):
+                self.currentChainMessage="当前链路未读取；未更改代理。";self.failure=String(describing:error)
+            }
+        }
+    }
     public func chooseProxyConfiguration() {
         guard !busy,state.phase=="off" else{return}
         let panel=NSOpenPanel();panel.canChooseFiles=true;panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
-        panel.message="选择当前代理使用的单节点 HTTP 配置。不会切换订阅；安全启动还会核验 Core、网关连接、TUN 与出口。"
+        panel.message="选择单节点 HTTP 或含拓展脚本结果的链式生成配置。不会切换订阅；安全启动还会核验 Core、网关连接、TUN 与出口。"
         if panel.runModal() == .OK,let url=panel.url {request(.registerProxyConfiguration,configurationPath:url.path)}
     }
     public func export() {
